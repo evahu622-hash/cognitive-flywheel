@@ -11,9 +11,20 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const search = searchParams.get("search") || "";
   const domain = searchParams.get("domain") || "";
+  const wantSummaries = searchParams.get("summaries") === "true";
 
   const supabase = await createServerSupabase();
   const { data: { user } } = await supabase.auth.getUser();
+
+  // 领域综述查询
+  if (wantSummaries && user) {
+    const { data: summaries } = await supabase
+      .from("knowledge_summaries")
+      .select("id, domain, compiled_content, source_ids, version, last_compiled_at")
+      .eq("user_id", user.id)
+      .order("last_compiled_at", { ascending: false });
+    return Response.json({ summaries: summaries ?? [] });
+  }
 
   // Demo 模式（未配置或未登录）
   if (!user) {
