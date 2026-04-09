@@ -405,7 +405,7 @@ export async function POST(req: Request) {
                           connection_type: rel.type,
                           reason: rel.reason,
                         },
-                        { onConflict: "user_id,from_id,to_id" }
+                        { onConflict: "from_id,to_id" }
                       );
                   }
                   return results;
