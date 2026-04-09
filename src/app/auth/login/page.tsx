@@ -37,7 +37,11 @@ function LoginForm() {
     });
 
     if (error) {
-      setError(error.message);
+      const msg =
+        error.message === "Invalid login credentials"
+          ? "邮箱或密码错误，请重试"
+          : error.message;
+      setError(msg);
       setLoading(false);
     } else {
       router.push(redirect);

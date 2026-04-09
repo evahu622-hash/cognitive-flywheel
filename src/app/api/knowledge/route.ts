@@ -69,7 +69,8 @@ export async function GET(req: Request) {
 
   if (domain) query = query.eq("domain", domain);
   if (search) {
-    query = query.or(`title.ilike.%${search}%,summary.ilike.%${search}%`);
+    const escaped = search.replace(/%/g, "\\%").replace(/_/g, "\\_").replace(/,/g, "");
+    query = query.or(`title.ilike.%${escaped}%,summary.ilike.%${escaped}%`);
   }
 
   const { data: items, error } = await query;

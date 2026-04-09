@@ -77,9 +77,11 @@ export default function FeedPage() {
   const [isDigesting, setIsDigesting] = useState(false);
   const [digestPhase, setDigestPhase] = useState("");
   const [results, setResults] = useState<DigestResult[]>([]);
+  const [showSuccess, setShowSuccess] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const detectedPlatform = url ? detectPlatform(url) : null;
+  const isValidUrl = url.trim().startsWith("http://") || url.trim().startsWith("https://");
+  const detectedPlatform = isValidUrl ? detectPlatform(url) : null;
 
   async function handleDigest() {
     if (!url.trim() && !note.trim() && !file) return;
@@ -96,7 +98,7 @@ export default function FeedPage() {
         if (note.trim()) formData.append("note", note);
         if (url.trim()) formData.append("url", url);
         res = await fetch("/api/feed", { method: "POST", body: formData });
-      } else if (url.trim()) {
+      } else if (isValidUrl) {
         // URL（可带想法）
         res = await fetch("/api/feed", {
           method: "POST",
@@ -104,11 +106,14 @@ export default function FeedPage() {
           body: JSON.stringify({ input: url, type: "url", note }),
         });
       } else {
-        // 纯文本
+        // 纯文本（如果 URL 框有非 URL 内容，合并到文本）
+        const textInput = [url.trim() && !isValidUrl ? url : "", note]
+          .filter(Boolean)
+          .join("\n\n");
         res = await fetch("/api/feed", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ input: note, type: "text" }),
+          body: JSON.stringify({ input: textInput, type: "text" }),
         });
       }
 
@@ -117,6 +122,8 @@ export default function FeedPage() {
       if (contentType.includes("application/json")) {
         const { result } = await res.json();
         setResults((prev) => [result, ...prev]);
+        setShowSuccess(true);
+        setTimeout(() => setShowSuccess(false), 3000);
       } else {
         // SSE
         const reader = res.body!.getReader();
@@ -136,6 +143,8 @@ export default function FeedPage() {
               const payload = JSON.parse(line.slice(6));
               if (payload.phase === "done") {
                 setResults((prev) => [payload.result, ...prev]);
+                setShowSuccess(true);
+                setTimeout(() => setShowSuccess(false), 3000);
               } else if (payload.phase === "error") {
                 setDigestPhase(`出错: ${payload.error}`);
               } else {
@@ -180,6 +189,16 @@ export default function FeedPage() {
         </Card>
       )}
 
+      {/* Success Banner */}
+      {showSuccess && (
+        <div className="flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950/30 px-4 py-3 animate-in fade-in slide-in-from-top-2 duration-300">
+          <Check className="h-4 w-4 text-green-600 dark:text-green-400" />
+          <span className="text-sm font-medium text-green-700 dark:text-green-300">
+            消化完成，已存入记忆层
+          </span>
+        </div>
+      )}
+
       {/* Unified Input Card */}
       <Card>
         <CardContent className="pt-6 space-y-4">
@@ -208,7 +227,7 @@ export default function FeedPage() {
           {/* Note / Thoughts Input */}
           <div>
             <div className="text-sm text-muted-foreground mb-1.5">
-              {url ? "你的想法（可选，会和原文一起消化）" : "输入想法或粘贴内容"}
+              {isValidUrl ? "你的想法（可选，会和原文一起消化）" : "输入想法或粘贴内容"}
             </div>
             <Textarea
               placeholder={

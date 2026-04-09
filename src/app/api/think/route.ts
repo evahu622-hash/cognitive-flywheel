@@ -13,7 +13,11 @@ import {
 } from "@/lib/evals";
 import { runCodeEvaluatorsForTrace } from "@/lib/evaluators";
 import { isEmbeddingConfigured } from "@/lib/embeddings";
-import { searchKnowledge, summarizeRetrievalSources } from "@/lib/retrieval";
+import {
+  searchKnowledge,
+  summarizeRetrievalSources,
+  type RetrievedKnowledgeItem,
+} from "@/lib/retrieval";
 
 // ============================================================
 // POST /api/think — 四大思考模式 API
@@ -24,6 +28,17 @@ interface ThinkRequest {
   mode: "roundtable" | "coach" | "crossdomain" | "mirror";
   question: string;
   context?: string; // 未来从记忆层检索的上下文
+}
+
+function buildContextPreviewItems(items: RetrievedKnowledgeItem[]) {
+  return items.slice(0, 6).map((item) => ({
+    id: item.id,
+    title: item.title,
+    summary: item.summary.slice(0, 200),
+    domain: item.domain,
+    tags: item.tags.slice(0, 6),
+    retrieval_source: item.retrieval_source,
+  }));
 }
 
 // 各模式的思考阶段动画
@@ -65,10 +80,12 @@ function getSystemPrompt(mode: string, context?: string): string {
       return `你是认知飞轮的「圆桌会议」引擎。你的任务是以多位真实专家的视角来分析用户的问题。
 
 ## 规则
-1. 选择 3 位与问题最相关的真实历史人物或当代思想家
+1. 选择 3 位与问题最相关的真实历史人物或当代思想家。只使用可验证的真实人物，不确定是否真实存在的人不要使用
 2. 每位专家必须提供与其他人不同甚至冲突的观点
 3. 专家的发言必须符合其本人的思维风格和已知观点
-4. 最后提炼出可行的关键洞察
+4. 如果提供了知识库上下文，专家分析中必须明确引用上下文里的具体信息（如"根据你此前关于…的笔记""你之前记录的…"），让用户能看到上下文对分析的实质影响
+5. 在证据不充分时使用"可能""一种观点认为"等措辞，不要把推断说成定论
+6. 最后提炼出可行的关键洞察
 
 ## 输出格式（严格JSON，不要markdown代码块）
 {
@@ -88,6 +105,8 @@ function getSystemPrompt(mode: string, context?: string): string {
 2. 盲区要具体可操作，不要泛泛而谈
 3. 学习路径要有时间节点和具体资源（书名、课程、实践方法）
 4. 既要指出不足，也要肯定优势
+5. 如果提供了知识库上下文，必须基于上下文中的具体信息来判断优势和盲区（如"从你关于…的笔记来看"），而非仅凭通用推断
+6. 建议中使用"建议考虑""可能有帮助"等措辞，避免武断的绝对化表述
 
 ## 输出格式（严格JSON）
 {
@@ -110,8 +129,9 @@ function getSystemPrompt(mode: string, context?: string): string {
 ## 规则
 1. 选择 3 个差异最大的领域（如：生物学、音乐、军事、建筑、经济学、物理学、心理学、体育等）
 2. 类比必须是结构性的（不是表面相似），要解释深层逻辑为什么一样
-3. 每个类比必须给出可操作的启发——用户可以如何将这个类比应用到自己的问题中
-4. 类比要让人有"啊哈！"的惊喜感
+3. 每个类比必须给出具体的操作映射：说明 A 中的什么机制与 B 中的什么机制对应，以及如何操作
+4. 类比要让人有"啊哈！"的惊喜感，不要停留在"XX和YY都很重要"的抽象层面
+5. 如果提供了知识库上下文，必须结合上下文中的具体知识来丰富类比
 
 ## 输出格式（严格JSON）
 {
@@ -127,10 +147,11 @@ function getSystemPrompt(mode: string, context?: string): string {
       return `你是认知飞轮的「历史镜鉴」引擎。你的任务是找到历史上面临过类似困境的先驱，分析他们的选择和智慧。
 
 ## 规则
-1. 选择 3 位历史人物（可以跨越不同时代和文化）
+1. 选择 3 位历史人物（可以跨越不同时代和文化），必须是有据可查的真实人物
 2. 他们面临的困境必须与用户的问题有结构性相似
 3. 要讲清楚他们做了什么选择、结果如何、我们可以学到什么
-4. 历史事实要准确，不要编造
+4. 历史事实要准确，不要编造；具体数字（年份、数量）必须有确信度，不确定时用"约"或"据记载"修饰
+5. 如果提供了知识库上下文，教训部分要结合上下文中的具体信息，使分析对用户更有针对性
 
 ## 输出格式（严格JSON）
 {
@@ -251,6 +272,7 @@ export async function POST(req: Request) {
           [];
         let finalContextText = context?.trim() ?? "";
         let retrievalError: string | null = null;
+        let contextPreviewItems: ReturnType<typeof buildContextPreviewItems> = [];
 
         try {
           sendEvent({ phase: "搜索记忆层..." });
@@ -279,6 +301,7 @@ export async function POST(req: Request) {
           });
 
           if (retrievedContext.length > 0) {
+            contextPreviewItems = buildContextPreviewItems(retrievedContext);
             const retrievedText = buildKnowledgeContextText(retrievedContext);
             finalContextText = [finalContextText, retrievedText]
               .filter(Boolean)
@@ -385,6 +408,8 @@ export async function POST(req: Request) {
             mode,
             contextItems: retrievedContext.length,
             contextIds: retrievedContext.map((item) => item.id),
+            contextPreview: finalContextText.slice(0, 2000),
+            contextPreviewItems,
             retrievalSources: summarizeRetrievalSources(retrievedContext),
             retrievalError,
           },
@@ -405,6 +430,8 @@ export async function POST(req: Request) {
           responsePayload: resultPayload,
           metadata: {
             contextItems: retrievedContext.length,
+            contextPreview: finalContextText.slice(0, 2000),
+            contextPreviewItems,
             retrievalSources: summarizeRetrievalSources(retrievedContext),
           },
         });

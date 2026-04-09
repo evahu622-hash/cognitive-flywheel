@@ -14,13 +14,17 @@ import {
 import { Brain, Rss, Database, Lightbulb, User, RefreshCw, LogOut, FlaskConical } from "lucide-react";
 import { createBrowserSupabase } from "@/lib/supabase";
 
-const navItems = [
+const allNavItems = [
   { title: "Feed", subtitle: "喂脑", href: "/feed", icon: Rss },
   { title: "Memory", subtitle: "记忆宫殿", href: "/memory", icon: Database },
   { title: "Think", subtitle: "思考室", href: "/think", icon: Lightbulb },
-  { title: "Evals", subtitle: "评估台", href: "/evals", icon: FlaskConical },
+  { title: "Evals", subtitle: "评估台", href: "/evals", icon: FlaskConical, devOnly: true },
   { title: "Me", subtitle: "认知画像", href: "/me", icon: User },
 ];
+
+const navItems = allNavItems.filter(
+  (item) => !item.devOnly || process.env.NEXT_PUBLIC_DEV_MODE === "true"
+);
 
 export function AppSidebar({ userEmail }: { userEmail?: string }) {
   const pathname = usePathname();

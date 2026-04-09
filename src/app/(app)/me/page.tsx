@@ -74,7 +74,50 @@ export default function MePage() {
       .catch(() => {});
   }, []);
 
-  const maxGrowth = Math.max(...p.recentGrowth.map((d) => d.items), 1);
+  // 补零：生成完整 7 天日期序列
+  const filledGrowth = (() => {
+    const today = new Date();
+    const last7 = Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(today);
+      d.setDate(d.getDate() - (6 - i));
+      return d
+        .toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" })
+        .replace("/", "-");
+    });
+    const growthMap = Object.fromEntries(
+      p.recentGrowth.map((d) => [d.date, d.items])
+    );
+    return last7.map((date) => ({ date, items: growthMap[date] ?? 0 }));
+  })();
+  const maxGrowth = Math.max(...filledGrowth.map((d) => d.items), 1);
+
+  // 动态成就：基于真实数据生成里程碑
+  const achievements = (() => {
+    const items: { emoji: string; text: string }[] = [];
+    const k = p.totalKnowledge;
+    const milestones = [1000, 500, 100, 50, 10];
+    for (const m of milestones) {
+      if (k >= m) {
+        items.push({ emoji: "📚", text: `知识条目突破 ${m}` });
+        break;
+      }
+    }
+    if (p.totalConnections > 0) {
+      items.push({ emoji: "🔗", text: `已建立 ${p.totalConnections} 个跨域关联` });
+    }
+    if (p.totalThoughts > 0) {
+      items.push({ emoji: "💡", text: `完成 ${p.totalThoughts} 次深度思考` });
+    }
+    const turns = p.flywheelTurns;
+    const turnMilestones = [1000, 500, 100, 50, 10];
+    for (const m of turnMilestones) {
+      if (turns >= m) {
+        items.push({ emoji: "🔄", text: `飞轮累计转动 ${m}+ 次` });
+        break;
+      }
+    }
+    return items;
+  })();
 
   return (
     <div className="flex flex-col gap-6 p-6 max-w-4xl mx-auto">
@@ -195,7 +238,7 @@ export default function MePage() {
           </CardHeader>
           <CardContent>
             <div className="flex items-end gap-2 h-32">
-              {p.recentGrowth.map((day) => {
+              {filledGrowth.map((day) => {
                 const height = (day.items / maxGrowth) * 100;
                 return (
                   <div key={day.date} className="flex-1 flex flex-col items-center gap-1">
@@ -248,33 +291,11 @@ export default function MePage() {
           </CardHeader>
           <CardContent>
             <div className="space-y-2">
-              {[
-                {
-                  emoji: "🔗",
-                  text: "首次跨域连接：免疫系统 × Agent 架构",
-                  date: "3月15日",
-                },
-                {
-                  emoji: "🎯",
-                  text: "完成第一次圆桌会议",
-                  date: "3月18日",
-                },
-                {
-                  emoji: "📚",
-                  text: "知识条目突破 40",
-                  date: "3月19日",
-                },
-                {
-                  emoji: "🔄",
-                  text: "飞轮连续运转 7 天",
-                  date: "今天",
-                },
-              ].map((achievement, i) => (
-                <div key={i} className="flex items-center justify-between text-sm">
+              {achievements.map((a, i) => (
+                <div key={i} className="flex items-center text-sm">
                   <span>
-                    {achievement.emoji} {achievement.text}
+                    {a.emoji} {a.text}
                   </span>
-                  <span className="text-xs text-muted-foreground">{achievement.date}</span>
                 </div>
               ))}
             </div>

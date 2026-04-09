@@ -16,35 +16,202 @@ function asArray(value: Json | undefined) {
   return Array.isArray(value) ? value : [];
 }
 
-function buildTraceSnapshot(trace: EvalTraceRow) {
+function buildTraceSnapshot(trace: EvalTraceRow, judgeName: LLMJudgeName) {
   const request = asRecord(trace.request_payload);
   const response = asRecord(trace.response_payload);
   const metadata = asRecord(trace.metadata);
   const result = asRecord(response?.result ?? null);
+  const sourcePreview =
+    metadata?.contentPreview ?? request?.inputPreview ?? request?.contentPreview ?? null;
+  const contextPreview =
+    metadata?.contextPreviewItems ?? metadata?.contextPreview ?? null;
+  const base = {
+    entryPoint: trace.entry_point,
+    mode: trace.mode,
+    request,
+    metadata,
+  };
+
+  let snapshot: Record<string, unknown> = base;
+
+  switch (judgeName) {
+    case "feed_summary_faithful":
+      snapshot = {
+        ...base,
+        sourcePreview,
+        output: {
+          title: result?.title ?? null,
+          summary: result?.summary ?? null,
+          keyPoints: result?.keyPoints ?? null,
+        },
+      };
+      break;
+    case "feed_title_specific":
+      snapshot = {
+        ...base,
+        sourcePreview,
+        output: {
+          title: result?.title ?? null,
+          summary: result?.summary ?? null,
+          keyPoints: result?.keyPoints ?? null,
+        },
+      };
+      break;
+    case "feed_tags_relevant":
+      snapshot = {
+        ...base,
+        sourcePreview,
+        output: {
+          title: result?.title ?? null,
+          summary: result?.summary ?? null,
+          tags: result?.tags ?? null,
+        },
+      };
+      break;
+    case "feed_store_worthy":
+      snapshot = {
+        ...base,
+        sourcePreview,
+        output: {
+          title: result?.title ?? null,
+          summary: result?.summary ?? null,
+          keyPoints: result?.keyPoints ?? null,
+          tags: result?.tags ?? null,
+          domain: result?.domain ?? null,
+        },
+      };
+      break;
+    case "feed_relationship_accurate":
+      snapshot = {
+        ...base,
+        sourcePreview,
+        newItem: {
+          title: result?.title ?? null,
+          summary: result?.summary ?? null,
+          domain: result?.domain ?? null,
+        },
+        relationships: result?.relationships ?? null,
+        relatedItems: result?.connections ?? null,
+      };
+      break;
+    case "feed_spark_surprising":
+      snapshot = {
+        ...base,
+        sourcePreview,
+        newItem: {
+          title: result?.title ?? null,
+          summary: result?.summary ?? null,
+          domain: result?.domain ?? null,
+        },
+        spark: result?.spark ?? null,
+      };
+      break;
+    case "think_grounded_in_context":
+      snapshot = {
+        ...base,
+        question: request?.question ?? request?.questionPreview ?? null,
+        contextIds: metadata?.contextIds ?? null,
+        contextPreview,
+        output: result ?? null,
+      };
+      break;
+    case "think_mode_fit":
+    case "think_specific_not_generic":
+    case "think_actionable":
+    case "think_save_worthy":
+      snapshot = {
+        ...base,
+        question: request?.question ?? request?.questionPreview ?? null,
+        contextPreview,
+        output: result ?? null,
+      };
+      break;
+    case "compile_faithful":
+      snapshot = {
+        ...base,
+        domain: request?.domain ?? metadata?.domain ?? null,
+        sourcePreview: metadata?.sourcePreview ?? null,
+        output: {
+          compiled_content: response?.compiled_content ?? null,
+          version: response?.version ?? null,
+          source_ids: response?.source_ids ?? null,
+        },
+      };
+      break;
+    case "compile_coherent":
+      snapshot = {
+        ...base,
+        domain: request?.domain ?? metadata?.domain ?? null,
+        output: {
+          compiled_content: response?.compiled_content ?? null,
+          version: response?.version ?? null,
+        },
+      };
+      break;
+    case "compile_incremental_correct":
+      snapshot = {
+        ...base,
+        domain: request?.domain ?? metadata?.domain ?? null,
+        previousSummary: {
+          version: metadata?.previousVersion ?? null,
+          sourceCount: metadata?.previousSourceCount ?? null,
+          compiledPreview: metadata?.previousCompiledPreview ?? null,
+        },
+        sourcePreview: metadata?.sourcePreview ?? null,
+        output: {
+          compiled_content: response?.compiled_content ?? null,
+          version: response?.version ?? null,
+          source_ids: response?.source_ids ?? null,
+        },
+      };
+      break;
+    case "lint_contradiction_valid":
+      snapshot = {
+        ...base,
+        output: {
+          contradictions: response?.contradictions ?? null,
+          totalItems: response?.totalItems ?? null,
+          orphans: response?.orphans ?? null,
+        },
+      };
+      break;
+    case "guardrail_fabricated_fact":
+    case "guardrail_overconfidence":
+      snapshot = {
+        ...base,
+        sourcePreview,
+        contextPreview,
+        question: request?.question ?? request?.questionPreview ?? null,
+        output:
+          trace.entry_point === "feed"
+            ? {
+                title: result?.title ?? null,
+                summary: result?.summary ?? null,
+                keyPoints: result?.keyPoints ?? null,
+                spark: result?.spark ?? null,
+                relationships: result?.relationships ?? null,
+              }
+            : trace.entry_point === "compile"
+              ? {
+                  compiled_content: response?.compiled_content ?? null,
+                  version: response?.version ?? null,
+                }
+              : result ?? response ?? null,
+      };
+      break;
+  }
 
   return JSON.stringify(
     {
-      entryPoint: trace.entry_point,
-      mode: trace.mode,
-      request,
-      response,
-      metadata,
-      extractedSourcePreview:
-        metadata?.contentPreview ?? request?.contentPreview ?? null,
-      retrievedContextIds: metadata?.contextIds ?? null,
+      ...snapshot,
       contextItems: response?.contextItems ?? metadata?.contextItems ?? null,
-      outputSummary:
-        trace.entry_point === "feed"
-          ? {
-              title: result?.title ?? null,
-              summary: result?.summary ?? null,
-              keyPoints: result?.keyPoints ?? null,
-              tags: result?.tags ?? null,
-            }
-          : {
-              result,
-              insights: result?.insights ?? null,
-            },
+      sourcePreview:
+        "sourcePreview" in snapshot ? snapshot.sourcePreview : sourcePreview,
+      contextPreview:
+        "contextPreview" in snapshot ? snapshot.contextPreview : contextPreview,
+      traceStatus: trace.trace_status,
+      traceId: trace.id,
+      modelName: trace.model_name ?? null,
     },
     null,
     2
@@ -52,7 +219,7 @@ function buildTraceSnapshot(trace: EvalTraceRow) {
 }
 
 function judgePrompt(trace: EvalTraceRow, judgeName: LLMJudgeName) {
-  const traceJson = buildTraceSnapshot(trace);
+  const traceJson = buildTraceSnapshot(trace, judgeName);
 
   switch (judgeName) {
     case "feed_summary_faithful":
@@ -308,9 +475,12 @@ export async function runLLMJudge(trace: EvalTraceRow, judgeName: LLMJudgeName) 
   if (judgeName === "think_grounded_in_context") {
     const metadata = asRecord(trace.metadata);
     const response = asRecord(trace.response_payload);
+    const contextItems = response?.contextItems ?? metadata?.contextItems;
     const hasContext =
       asArray(metadata?.contextIds).length > 0 ||
-      typeof response?.contextItems === "number";
+      (typeof contextItems === "number" && contextItems > 0) ||
+      Boolean(metadata?.contextPreview) ||
+      asArray(metadata?.contextPreviewItems).length > 0;
 
     if (!hasContext) {
       return {

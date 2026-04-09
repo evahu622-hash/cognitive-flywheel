@@ -45,10 +45,12 @@ export async function classifyRelationships(
     model,
     system: `你是知识关系分析引擎。判断一篇新内容与已有知识的关系。
 关系类型必须是以下之一：
-- supports: 新内容支持/印证已有观点
-- contradicts: 新内容与已有观点矛盾
-- extends: 新内容扩展/深化已有知识
-- different_angle: 新内容从不同视角讨论同一话题
+- supports: 新内容明确支持/印证已有观点（要有具体的观点对应关系）
+- contradicts: 新内容与已有观点存在实质性矛盾（不仅是表述不同）
+- extends: 新内容扩展/深化已有知识（在已有基础上增加了新维度）
+- different_angle: 新内容确实从不同视角讨论同一话题（需要双方都有实质内容）
+
+重要：如果新内容或已有知识信息不足（如只有标题没有实质内容摘要），不要强行分类该条目，直接从返回数组中省略。只对有充分证据的关系进行分类。
 只返回合法 JSON 数组，不要包含 markdown 代码块。`,
     prompt: `新内容：「${newItem.title}」: ${newItem.summary.slice(0, 300)}
 
@@ -116,7 +118,8 @@ export async function generateConnectionSpark(
     system: `你是跨域连接引擎。找到一个出人意料但有启发性的跨领域类比。
 要求：
 - 类比必须来自与输入内容完全不同的领域
-- 要具体、有趣，不要泛泛而谈
+- 必须给出具体的结构映射：说明原文中的什么机制/原理与类比领域中的什么机制/原理对应
+- 不要停留在"XX和YY都很重要"的抽象层面，要有可操作的启发
 - 一段话，不超过100字
 只返回 JSON，不要包含 markdown 代码块。`,
     prompt: `新内容 [${newItem.domain}]：「${newItem.title}」— ${newItem.summary.slice(0, 300)}

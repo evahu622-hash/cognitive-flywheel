@@ -4,13 +4,17 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Rss, Database, Lightbulb, User, FlaskConical } from "lucide-react";
 
-const navItems = [
+const allNavItems = [
   { href: "/feed", icon: Rss, label: "Feed" },
   { href: "/memory", icon: Database, label: "Memory" },
   { href: "/think", icon: Lightbulb, label: "Think" },
-  { href: "/evals", icon: FlaskConical, label: "Evals" },
+  { href: "/evals", icon: FlaskConical, label: "Evals", devOnly: true },
   { href: "/me", icon: User, label: "Me" },
 ];
+
+const navItems = allNavItems.filter(
+  (item) => !item.devOnly || process.env.NEXT_PUBLIC_DEV_MODE === "true"
+);
 
 export function MobileNav() {
   const pathname = usePathname();

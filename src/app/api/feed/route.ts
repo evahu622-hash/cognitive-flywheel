@@ -26,9 +26,9 @@ import {
   classifyRelationships,
   generateConnectionSpark,
   checkCompileTrigger,
-  compileDomainSummary,
 } from "@/lib/knowledge";
 import type { RelationshipResult, SparkResult } from "@/lib/knowledge";
+import { runCompileWithEval } from "@/lib/eval-pipelines";
 
 // ============================================================
 // POST /api/feed — 认知飞轮 Feed 消化管道
@@ -481,7 +481,14 @@ export async function POST(req: Request) {
           if (compileTrigger.shouldCompile) {
             after(async () => {
               try {
-                await compileDomainSummary(supabase, user.id, analysis.domain);
+                await runCompileWithEval({
+                  supabase,
+                  userId: user.id,
+                  domain: analysis.domain,
+                  modelName,
+                  triggerSource: "feed_auto",
+                  sourceTraceId: traceId,
+                });
               } catch (err) {
                 console.error("Background domain compilation failed:", err);
               }
@@ -598,6 +605,18 @@ async function analyzeContent(content: string): Promise<AnalysisResult> {
 - thought: 用户自己的想法、反思
 - insight: 从思考中提炼的洞察
 
+## 标题要求
+- 标题必须包含核心论点、关键数据或特定对象，能与其他同话题内容区分
+- 禁止使用"关于XX的思考""某某的观点总结"这类套话模板
+- 好的标题示例："巴菲特2024股东信：集中投资优于分散，自由现金流是核心指标"
+- 差的标题示例："巴菲特关于投资的最新讨论"
+
+## 标签要求
+- 每个标签必须有检索区分度，不要使用过于宽泛的词（如"AI""技术"）
+- 不得用中英文重复表达同一概念（如同时出现"LLM"和"大语言模型"）
+- 不要使用平台名（如"YouTube""微信"）作为标签
+- 优先使用具体人名、方法论、核心概念作标签
+
 如果内容包含"用户的想法和批注"部分，请同时考虑原文和用户批注来生成摘要。
 
 只返回合法 JSON，不要包含 markdown 代码块或其他文字。`,
@@ -606,7 +625,7 @@ async function analyzeContent(content: string): Promise<AnalysisResult> {
 ${content.slice(0, 4000)}
 
 返回格式：
-{"type":"article","title":"简洁中文标题","summary":"3-5句话的摘要","keyPoints":["要点1","要点2","要点3"],"tags":["标签1","标签2","标签3"],"domain":"领域名"}`,
+{"type":"article","title":"具体中文标题（包含核心论点或关键对象）","summary":"3-5句话的摘要","keyPoints":["要点1","要点2","要点3"],"tags":["标签1","标签2","标签3"],"domain":"领域名"}`,
   });
 
   const cleaned = cleanAIResponse(text);

@@ -42,8 +42,8 @@ const modes: ModeConfig[] = [
     subtitle: "Roundtable",
     description: "召集多位专家从不同视角挑战和完善你的想法",
     icon: Users,
-    color: "text-muted-foreground",
-    bgColor: "",
+    color: "text-blue-600 dark:text-blue-400",
+    bgColor: "bg-blue-50 dark:bg-blue-950/30",
     placeholder: "输入你想讨论的问题或想法，专家团会从不同角度分析...",
   },
   {
@@ -52,8 +52,8 @@ const modes: ModeConfig[] = [
     subtitle: "Cognitive Coach",
     description: "发现你的知识盲区，生成个性化学习路径",
     icon: GraduationCap,
-    color: "text-muted-foreground",
-    bgColor: "",
+    color: "text-orange-600 dark:text-orange-400",
+    bgColor: "bg-orange-50 dark:bg-orange-950/30",
     placeholder: "描述你想深入了解的领域或最近的困惑...",
   },
   {
@@ -62,8 +62,8 @@ const modes: ModeConfig[] = [
     subtitle: "Cross-Domain",
     description: "从其他领域借鉴灵感，发现意想不到的类比",
     icon: Shuffle,
-    color: "text-muted-foreground",
-    bgColor: "",
+    color: "text-purple-600 dark:text-purple-400",
+    bgColor: "bg-purple-50 dark:bg-purple-950/30",
     placeholder: "输入一个概念或问题，看看其他领域怎么看...",
   },
   {
@@ -72,8 +72,8 @@ const modes: ModeConfig[] = [
     subtitle: "History Mirror",
     description: "先驱们遇到过同样的问题，看看他们怎么做的",
     icon: History,
-    color: "text-muted-foreground",
-    bgColor: "",
+    color: "text-amber-600 dark:text-amber-400",
+    bgColor: "bg-amber-50 dark:bg-amber-950/30",
     placeholder: "描述你当前面临的困境或决策...",
   },
 ];
@@ -149,8 +149,8 @@ function CoachResult({
               <ul className="text-sm space-y-1">
                 {data.blindSpots.map((spot: any, i: number) => (
                   <li key={i} className="flex items-start gap-2">
-                    <span className={spot.severity === "high" ? "text-red-500" : "text-amber-500"}>
-                      {spot.severity === "high" ? "🔹" : "🔸"}
+                    <span className={spot.severity === "high" ? "text-red-500" : "text-blue-500"}>
+                      {spot.severity === "high" ? "🔸" : "🔹"}
                     </span>
                     <span>
                       <strong>{spot.area}</strong>：{spot.detail}
@@ -474,7 +474,9 @@ export default function ThinkPage() {
             >
               <CardContent className="pt-5 pb-5">
                 <div className="flex items-start gap-3">
-                  <mode.icon className="h-5 w-5 text-muted-foreground mt-0.5" />
+                  <div className={`p-1.5 rounded-md ${mode.bgColor}`}>
+                    <mode.icon className={`h-5 w-5 ${mode.color}`} />
+                  </div>
                   <div>
                     <div className="font-semibold text-[15px]">
                       {mode.title}
@@ -513,7 +515,7 @@ export default function ThinkPage() {
           <ArrowLeft className="h-4 w-4 mr-1" />
           返回
         </Button>
-        {currentMode && <currentMode.icon className="h-4 w-4 text-muted-foreground" />}
+        {currentMode && <currentMode.icon className={`h-4 w-4 ${currentMode.color}`} />}
         <h1 className="text-xl font-semibold">{currentMode?.title}</h1>
       </div>
 
