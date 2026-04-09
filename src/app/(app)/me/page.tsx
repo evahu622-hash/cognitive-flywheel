@@ -1,7 +1,9 @@
 "use client";
 
+import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   User,
   Target,
@@ -13,27 +15,91 @@ import {
   GitBranch,
   ArrowUp,
   Zap,
+  LogOut,
 } from "lucide-react";
 import { COGNITIVE_PROFILE } from "@/lib/mock-data";
+import { createBrowserSupabase } from "@/lib/supabase";
+
+const DOMAIN_COLORS: Record<string, string> = {
+  投资: "#3B82F6",
+  "Agent Building": "#8B5CF6",
+  健康: "#10B981",
+  一人公司: "#F59E0B",
+  跨领域: "#EC4899",
+};
 
 export default function MePage() {
-  const p = COGNITIVE_PROFILE;
-  const maxGrowth = Math.max(...p.recentGrowth.map((d) => d.items));
+  const [p, setProfile] = useState(COGNITIVE_PROFILE);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const router = useRouter();
+
+  useEffect(() => {
+    const supabase = createBrowserSupabase();
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      setUserEmail(user?.email ?? null);
+    });
+  }, []);
+
+  async function handleLogout() {
+    const supabase = createBrowserSupabase();
+    await supabase.auth.signOut();
+    router.push("/auth/login");
+    router.refresh();
+  }
+
+  useEffect(() => {
+    fetch("/api/stats")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.stats) {
+          setProfile({
+            ...COGNITIVE_PROFILE,
+            ...data.stats,
+            // 确保领域有颜色
+            domains: (data.stats.domains ?? COGNITIVE_PROFILE.domains).map(
+              (d: { name: string; count: number; color?: string }) => ({
+                ...d,
+                color: d.color || DOMAIN_COLORS[d.name] || "#6B7280",
+              })
+            ),
+            // 保留盲区和成长数据的 fallback
+            blindSpots: data.stats.blindSpots ?? COGNITIVE_PROFILE.blindSpots,
+            recentGrowth:
+              data.stats.recentGrowth?.length > 0
+                ? data.stats.recentGrowth
+                : COGNITIVE_PROFILE.recentGrowth,
+          });
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const maxGrowth = Math.max(...p.recentGrowth.map((d) => d.items), 1);
 
   return (
     <div className="flex flex-col gap-6 p-6 max-w-4xl mx-auto">
       <div>
-        <h1 className="text-3xl font-bold flex items-center gap-2">
-          <User className="h-8 w-8" />
-          Me · 认知画像
-        </h1>
-        <p className="text-muted-foreground mt-2">
-          你的知识地图、盲区地图、成长曲线
-        </p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-[30px] font-bold">Me</h1>
+            <p className="text-sm text-muted-foreground mt-1">
+              你的知识地图、盲区地图、成长曲线
+            </p>
+          </div>
+          {userEmail && (
+            <div className="flex items-center gap-3">
+              <span className="text-sm text-muted-foreground hidden sm:inline">{userEmail}</span>
+              <Button variant="outline" size="sm" onClick={handleLogout}>
+                <LogOut className="h-3.5 w-3.5 mr-1.5" />
+                登出
+              </Button>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Flywheel Status - Hero Card */}
-      <Card className="bg-gradient-to-br from-primary/10 via-primary/5 to-transparent border-primary/20">
+      <Card>
         <CardContent className="pt-6">
           <div className="flex items-center justify-between">
             <div>
@@ -46,7 +112,7 @@ export default function MePage() {
               </p>
             </div>
             <div className="text-center">
-              <div className="text-5xl font-bold text-primary">{p.flywheelTurns}</div>
+              <div className="text-5xl font-bold" style={{ color: "var(--flywheel)" }}>{p.flywheelTurns}</div>
               <div className="text-sm text-muted-foreground">飞轮转数</div>
             </div>
           </div>
@@ -64,7 +130,7 @@ export default function MePage() {
             <div className="text-3xl font-bold">{p.totalKnowledge}</div>
             <div className="flex items-center gap-1 text-xs text-green-500 mt-1">
               <ArrowUp className="h-3 w-3" />
-              +5 本周
+              +{p.recentGrowth.reduce((sum, d) => sum + d.items, 0)} 本周
             </div>
           </CardContent>
         </Card>
@@ -75,10 +141,6 @@ export default function MePage() {
               <span className="text-sm text-muted-foreground">思考记录</span>
             </div>
             <div className="text-3xl font-bold">{p.totalThoughts}</div>
-            <div className="flex items-center gap-1 text-xs text-green-500 mt-1">
-              <ArrowUp className="h-3 w-3" />
-              +3 本周
-            </div>
           </CardContent>
         </Card>
         <Card>
@@ -88,10 +150,6 @@ export default function MePage() {
               <span className="text-sm text-muted-foreground">跨域关联</span>
             </div>
             <div className="text-3xl font-bold">{p.totalConnections}</div>
-            <div className="flex items-center gap-1 text-xs text-green-500 mt-1">
-              <ArrowUp className="h-3 w-3" />
-              +2 本周
-            </div>
           </CardContent>
         </Card>
       </div>
@@ -107,7 +165,7 @@ export default function MePage() {
           </CardHeader>
           <CardContent className="space-y-3">
             {p.domains.map((domain) => {
-              const maxCount = Math.max(...p.domains.map((d) => d.count));
+              const maxCount = Math.max(...p.domains.map((d) => d.count), 1);
               const pct = (domain.count / maxCount) * 100;
               return (
                 <div key={domain.name}>

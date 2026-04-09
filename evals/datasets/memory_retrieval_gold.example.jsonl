@@ -1,0 +1,2 @@
+{"id":"retrieval-1","user_id":"REPLACE_WITH_USER_ID","query":"如何建立 AI 产品的 eval 系统","gold_item_ids":["REPLACE_WITH_GOLD_ITEM_ID"],"acceptable_item_ids":["REPLACE_WITH_GOLD_ITEM_ID"],"best_item_id":"REPLACE_WITH_GOLD_ITEM_ID","domain":"Agent Building","notes":"精确概念检索"}
+{"id":"retrieval-2","user_id":"REPLACE_WITH_USER_ID","query":"创业初期先做不规模化的事情有什么启发","gold_item_ids":["REPLACE_WITH_GOLD_ITEM_ID"],"acceptable_item_ids":["REPLACE_WITH_GOLD_ITEM_ID","OPTIONAL_ACCEPTABLE_ITEM_ID"],"best_item_id":"REPLACE_WITH_GOLD_ITEM_ID","domain":"一人公司","notes":"允许多个可接受结果"}

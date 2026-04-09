@@ -9,6 +9,8 @@ export interface KnowledgeItem {
   domain: string;
   createdAt: string;
   connections: string[];
+  sourceUrl?: string | null;
+  rawContent?: string | null;
 }
 
 export interface ThinkSession {

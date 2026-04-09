@@ -1,25 +1,11 @@
-import { streamText, type LanguageModel } from "ai";
-import { anthropic } from "@ai-sdk/anthropic";
-import { openai } from "@ai-sdk/openai";
-import { google } from "@ai-sdk/google";
-
-// Model registry - easy to switch providers
-function getModel(modelId: string): LanguageModel {
-  switch (modelId) {
-    case "gpt-4o":
-      return openai("gpt-4o");
-    case "gemini-pro":
-      return google("gemini-2.0-flash");
-    case "claude-sonnet":
-    default:
-      return anthropic("claude-sonnet-4-20250514");
-  }
-}
+import { streamText } from "ai";
+import { getModel, getModelByName } from "@/lib/models";
 
 export async function POST(req: Request) {
-  const { messages, model = "claude-sonnet" } = await req.json();
+  const { messages, model } = await req.json();
 
-  const selectedModel = getModel(model);
+  // 支持按名称指定模型，否则使用 heavy 用途默认模型
+  const selectedModel = model ? getModelByName(model) : getModel("heavy");
 
   const result = streamText({
     model: selectedModel,
