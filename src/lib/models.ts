@@ -87,11 +87,31 @@ export function getConfiguredModelName(purpose: ModelPurpose): ModelName {
  * 按名称获取模型实例
  * 支持前端 API 参数 override
  */
+/** 兜底模型链：如果首选模型不可用，按顺序尝试 */
+const FALLBACK_CHAINS: Record<string, string[]> = {
+  "minimax-fast": ["minimax", "gpt-4o-mini", "claude-haiku"],
+  "minimax": ["minimax-fast", "gpt-4o", "claude-sonnet"],
+  "claude-haiku": ["minimax-fast", "gpt-4o-mini"],
+  "claude-sonnet": ["minimax", "gpt-4o"],
+  "gpt-4o": ["claude-sonnet", "minimax"],
+  "gpt-4o-mini": ["claude-haiku", "minimax-fast"],
+};
+
 export function getModelByName(name: string): LanguageModel {
   const factory = MODEL_REGISTRY[name];
   if (!factory) {
-    console.warn(`Unknown model "${name}", falling back to claude-sonnet`);
-    return MODEL_REGISTRY["claude-sonnet"]();
+    console.warn(`Unknown model "${name}", trying fallback chain`);
+    const fallbacks = FALLBACK_CHAINS[name] ?? Object.keys(MODEL_REGISTRY);
+    for (const fallbackName of fallbacks) {
+      const fallbackFactory = MODEL_REGISTRY[fallbackName];
+      if (fallbackFactory) {
+        console.warn(`Using fallback model: ${fallbackName}`);
+        return fallbackFactory();
+      }
+    }
+    // 最后兜底：用注册表中第一个可用的模型
+    const firstFactory = Object.values(MODEL_REGISTRY)[0];
+    return firstFactory();
   }
   return factory();
 }

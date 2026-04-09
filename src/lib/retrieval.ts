@@ -7,6 +7,9 @@ import {
   isEmbeddingConfigured,
 } from "./embeddings";
 import { createServerSupabase } from "./supabase-server";
+import { generateText } from "ai";
+import { getModel } from "./models";
+import { cleanAIResponse } from "./utils";
 
 type AppSupabase = SupabaseClient<Database>;
 type KnowledgeRow = Database["public"]["Tables"]["knowledge_items"]["Row"];
@@ -258,6 +261,94 @@ export async function searchKnowledgeLexical(
   return (data ?? []).map((item) => mapLexicalResult(item));
 }
 
+// ── LLM Index 搜索 ───────────────────────────────────────────
+// 用 LLM 读取知识库索引，判断哪些条目与查询相关
+// 替代 embedding 语义搜索，理解意图而非仅匹配相似度
+
+async function searchKnowledgeByLLMIndex(
+  supabase: AppSupabase,
+  queryText: string,
+  limit: number,
+  domain?: string | null
+): Promise<RetrievedKnowledgeItem[]> {
+  // 构建 index：每条知识一行摘要
+  let query = supabase
+    .from("knowledge_items")
+    .select("id, type, title, summary, tags, domain, source_url, raw_content, created_at")
+    .order("created_at", { ascending: false })
+    .limit(200); // 最多读 200 条，约 10-20k tokens
+
+  if (domain) {
+    query = query.eq("domain", domain);
+  }
+
+  const { data: items, error } = await query;
+  if (error || !items || items.length === 0) {
+    return [];
+  }
+
+  // 如果条目很少（<= limit），直接全部返回，不需要 LLM 筛选
+  if (items.length <= limit) {
+    return items.map((item) => ({
+      ...item,
+      tags: item.tags ?? [],
+      source_url: item.source_url ?? null,
+      raw_content: item.raw_content ?? null,
+      retrieval_source: "lexical" as RetrievalSource,
+      lexical_score: null,
+      similarity: null,
+    }));
+  }
+
+  // 构建 index 文本
+  const indexText = items
+    .map(
+      (item, i) =>
+        `[${i}] [${item.domain}] ${item.title} — ${item.summary.slice(0, 80)} #${(item.tags ?? []).join(" #")}`
+    )
+    .join("\n");
+
+  try {
+    const model = getModel("light");
+    const { text } = await generateText({
+      model,
+      system: `你是知识检索引擎。基于用户的查询，从知识索引中找出最相关的条目。
+"相关"不仅是表面关键词匹配，更包括：
+- 讨论相同主题但用不同术语的条目
+- 从不同领域提供类似洞察的条目
+- 可以帮助回答查询或提供有价值背景的条目
+只返回 JSON 数组（条目编号），不要包含 markdown 代码块。`,
+      prompt: `查询: ${queryText.slice(0, 300)}
+
+知识索引（共 ${items.length} 条）:
+${indexText}
+
+返回最相关的 ${limit} 条的编号，格式: [0, 3, 7]`,
+    });
+
+    const cleaned = cleanAIResponse(text);
+    const indices = JSON.parse(cleaned) as number[];
+
+    if (!Array.isArray(indices)) return [];
+
+    return indices
+      .filter((i) => typeof i === "number" && i >= 0 && i < items.length)
+      .slice(0, limit)
+      .map((i) => ({
+        ...items[i],
+        tags: items[i].tags ?? [],
+        source_url: items[i].source_url ?? null,
+        raw_content: items[i].raw_content ?? null,
+        retrieval_source: "semantic" as RetrievalSource, // 标记为 semantic 因为是意图理解
+        lexical_score: null,
+        similarity: 0.8, // LLM 判定相关，给一个默认置信度
+      }));
+  } catch (error) {
+    console.warn("LLM index search failed:", error);
+    return [];
+  }
+}
+
 export async function searchKnowledge(
   queryText: string,
   options: SearchKnowledgeOptions = {}
@@ -270,6 +361,7 @@ export async function searchKnowledge(
     return [];
   }
 
+  // 策略：全文搜索 + LLM Index 搜索（或 Embedding 搜索）并行
   const lexicalResults = await searchKnowledgeLexical(normalizedQuery, {
     supabase,
     limit,
@@ -277,10 +369,12 @@ export async function searchKnowledge(
   });
 
   let semanticResults: RetrievedKnowledgeItem[] = [];
-  const shouldUseSemantic =
+
+  // 优先使用 Embedding（如果可用），否则用 LLM Index 搜索
+  const useEmbedding =
     options.includeSemantic !== false && isEmbeddingConfigured();
 
-  if (shouldUseSemantic) {
+  if (useEmbedding) {
     try {
       const queryEmbedding =
         options.queryEmbedding ??
@@ -293,8 +387,22 @@ export async function searchKnowledge(
 
       semanticResults = similarKnowledge.map((item) => mapSemanticResult(item));
     } catch (error) {
-      console.warn("Semantic search degraded:", error);
+      console.warn("Semantic search degraded, falling back to LLM index:", error);
+      semanticResults = await searchKnowledgeByLLMIndex(
+        supabase,
+        normalizedQuery,
+        limit,
+        options.domain ?? null
+      );
     }
+  } else {
+    // 无 Embedding，使用 LLM Index 搜索
+    semanticResults = await searchKnowledgeByLLMIndex(
+      supabase,
+      normalizedQuery,
+      limit,
+      options.domain ?? null
+    );
   }
 
   const mergedResults = mergeRetrievedKnowledge(
