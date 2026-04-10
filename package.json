@@ -11,6 +11,7 @@
     "evals:split": "node scripts/split-eval-dataset.mjs",
     "evals:retrieval": "node scripts/eval-retrieval.mjs",
     "evals:gate": "node scripts/eval-gate.mjs",
+    "evals:dataset-report": "node scripts/eval-dataset-report.mjs",
     "evals:judge-metrics": "node scripts/eval-judge-metrics.mjs",
     "e2e:user-flow": "node scripts/e2e-user-flow.mjs",
     "embeddings:test": "node scripts/test-embedding-providers.mjs"
@@ -45,6 +46,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.0",
+    "postgres": "^3.4.9",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

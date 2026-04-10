@@ -4,7 +4,14 @@ import {
   isMissingEvalTableMessage,
 } from "@/lib/eval-setup";
 
-const VALID_ENTRY_POINTS = ["feed", "memory", "think", "save_insight"] as const;
+const VALID_ENTRY_POINTS = [
+  "feed",
+  "memory",
+  "think",
+  "save_insight",
+  "compile",
+  "lint",
+] as const;
 const VALID_TRACE_STATUSES = ["running", "success", "error", "partial"] as const;
 const VALID_REVIEW_STATES = ["all", "reviewed", "unreviewed"] as const;
 

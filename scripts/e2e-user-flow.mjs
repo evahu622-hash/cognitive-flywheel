@@ -193,6 +193,36 @@ async function main() {
     "Save insight did not create knowledge items"
   );
 
+  const compileDomain = feedResult.domain || "跨领域";
+
+  const compileResponse = await authedFetch("/api/knowledge/compile", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      domain: compileDomain,
+    }),
+  });
+
+  assert(compileResponse.ok, `/api/knowledge/compile returned ${compileResponse.status}`);
+  const compilePayload = await compileResponse.json();
+  assert(
+    typeof compilePayload.compiled_content === "string" &&
+      compilePayload.compiled_content.length > 0,
+    "Compile did not return compiled_content"
+  );
+
+  const lintResponse = await authedFetch("/api/knowledge/lint", {
+    method: "POST",
+  });
+  assert(lintResponse.ok, `/api/knowledge/lint returned ${lintResponse.status}`);
+  const lintPayload = await lintResponse.json();
+  assert(
+    typeof lintPayload.totalItems === "number",
+    "Lint did not return totalItems"
+  );
+
   const evalsMetricsResponse = await authedFetch("/api/evals/metrics");
   const evalsMetricsPayload = await evalsMetricsResponse.json();
   assert(
@@ -223,6 +253,8 @@ async function main() {
         feedItemId: feedResult.id,
         thinkSessionId: thinkDone.sessionId,
         savedItemIds: savePayload.savedItemIds,
+        compiledDomain: compilePayload.domain ?? compileDomain,
+        lintTotalItems: lintPayload.totalItems,
         evalsSetupRequired: Boolean(evalsMetricsPayload.setupRequired),
       },
       null,

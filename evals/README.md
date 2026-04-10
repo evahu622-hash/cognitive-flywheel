@@ -23,6 +23,7 @@ npm run evals:export -- --entry-point=think --limit=100 --out=evals/datasets/thi
 可选参数：
 
 - `--entry-point=feed|think|save_insight`
+- `--entry-point=feed|think|save_insight|compile|lint`
 - `--status=success|error|running|partial`
 - `--limit=100`
 - `--out=evals/datasets/custom.jsonl`
@@ -57,6 +58,21 @@ npm run evals:judge-metrics -- --input=evals/datasets/splits/dev.jsonl --dataset
 
 ## CI Gate
 
+先建议看覆盖报告：
+
+```bash
+npm run evals:dataset-report -- --input=evals/datasets/splits/dev.jsonl
+```
+
+它会告诉你：
+
+- 各 `entry_point` 的样本数
+- 每个 gate evaluator 的相关样本数
+- 缺失 evaluator 结果的数量
+- 是否达到最小样本要求
+
+然后再跑 gate：
+
 ```bash
 npm run evals:gate -- --input=evals/datasets/splits/dev.jsonl
 ```
@@ -65,9 +81,21 @@ npm run evals:gate -- --input=evals/datasets/splits/dev.jsonl
 
 - `feed_summary_faithful >= 0.85`
 - `think_mode_fit >= 0.85`
+- `compile_faithful >= 0.85`
+- `lint_contradiction_valid >= 0.80`
 - `guardrail_fabricated_fact == 1.0`
 
-如果数据集中没有对应 evaluator 样本，会打印 `SKIP`，不会直接报错。
+默认还会做覆盖门禁：
+
+- 缺少相关 `entry_point` 成功样本会直接 `FAIL COVERAGE`
+- 某个 evaluator 在相关 trace 上没有结果，会直接 `FAIL COVERAGE`
+- 样本数低于最小要求，也会直接 `FAIL COVERAGE`
+
+如果你只是临时查看质量，不想因为缺样本阻断，可以显式关闭严格覆盖：
+
+```bash
+npm run evals:gate -- --input=evals/datasets/splits/dev.jsonl --strict-coverage=false
+```
 
 ## Retrieval Eval
 

@@ -1,7 +1,6 @@
 import { createServerSupabase } from "@/lib/supabase-server";
-import { compileDomainSummary } from "@/lib/knowledge";
-import { createEvalTrace, runEvalSpan, updateEvalTrace } from "@/lib/evals";
 import { getConfiguredModelName } from "@/lib/models";
+import { runCompileWithEval } from "@/lib/eval-pipelines";
 
 export async function POST(req: Request) {
   const requestStartedAtMs = Date.now();
@@ -25,42 +24,15 @@ export async function POST(req: Request) {
   }
 
   const modelName = getConfiguredModelName("light");
-  const traceId = await createEvalTrace({
-    supabase,
-    userId: user.id,
-    entryPoint: "compile",
-    modelName,
-    promptVersion: "compile-v1",
-    requestPayload: { domain },
-    metadata: { domain },
-  });
 
   try {
-    const result = await runEvalSpan({
+    const { result } = await runCompileWithEval({
       supabase,
       userId: user.id,
-      traceId,
-      spanName: "compile_domain_summary",
-      inputPayload: { domain },
-      fn: () => compileDomainSummary(supabase, user.id, domain),
-      outputMapper: (value) => ({
-        version: value.version,
-        sourceCount: value.source_ids.length,
-      }),
-    });
-
-    await updateEvalTrace({
-      supabase,
-      traceId,
-      status: "success",
-      responsePayload: {
-        domain,
-        compiled_content: result.compiled_content,
-        version: result.version,
-        source_ids: result.source_ids,
-      },
-      metadata: { domain },
+      domain,
+      modelName,
       startedAtMs: requestStartedAtMs,
+      triggerSource: "manual",
     });
 
     return Response.json({
@@ -71,16 +43,6 @@ export async function POST(req: Request) {
     });
   } catch (err) {
     console.error("Compile domain summary error:", err);
-    await updateEvalTrace({
-      supabase,
-      traceId,
-      status: "error",
-      responsePayload: {},
-      metadata: { domain },
-      errorMessage: err instanceof Error ? err.message : String(err),
-      startedAtMs: requestStartedAtMs,
-    });
-
     return Response.json(
       { error: err instanceof Error ? err.message : String(err) },
       { status: 500 }
