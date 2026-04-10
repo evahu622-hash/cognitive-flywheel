@@ -6,7 +6,6 @@ import { createBrowserSupabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Brain } from "lucide-react";
-import Link from "next/link";
 
 export default function LoginPage() {
   return (
@@ -97,14 +96,7 @@ function LoginForm() {
         </form>
 
         <p className="text-center text-sm text-muted-foreground">
-          没有账号？{" "}
-          <Link
-            href="/auth/signup"
-            className="hover:underline"
-            style={{ color: "var(--flywheel)" }}
-          >
-            注册
-          </Link>
+          内测阶段，暂未开放注册
         </p>
       </div>
     </div>
