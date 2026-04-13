@@ -39,8 +39,22 @@ import {
 const THINK_RATE_LIMIT = { windowMs: 60_000, maxRequests: 6 };
 // SSE 心跳
 const HEARTBEAT_INTERVAL_MS = 15_000;
-// Think 温度（可通过环境变量覆盖）
-const THINK_TEMPERATURE = Number(process.env.THINK_TEMPERATURE ?? "0.8");
+// Think 温度:per-mode 配置,来自 2026-04-13 Claude-judge temperature A/B eval
+// (scripts/temp-eval-results/2026-04-13T07-37-42-404Z-rejudged-claude-judged)
+// - coach: 0.8  两 judge 一致最优
+// - crossdomain: 0.3  Claude judge 下 0.3/0.5 并列最高,0.8 最差
+// - roundtable: 0.5  Claude judge 下最高,MiniMax judge 下第二;0.8 有 parse 失败 + latency outlier
+// - mirror: 0.8  温度对 mirror 无有效信号(两 judge 推荐相反),保持默认;真正问题是 prompt 的可操作性短板
+// 可通过 THINK_TEMPERATURE env 整体覆盖,便于实验时回退到单一值
+const THINK_TEMPERATURE_BY_MODE: Record<ThinkRequest["mode"], number> = {
+  roundtable: 0.5,
+  coach: 0.8,
+  crossdomain: 0.3,
+  mirror: 0.8,
+};
+const THINK_TEMPERATURE_OVERRIDE = process.env.THINK_TEMPERATURE
+  ? Number(process.env.THINK_TEMPERATURE)
+  : null;
 
 // ============================================================
 // POST /api/think — 四大思考模式 API
@@ -359,6 +373,9 @@ export async function POST(req: Request) {
           webContext: coachWeb?.promptText || crossdomainWeb?.promptText,
         });
 
+        const modeTemperature =
+          THINK_TEMPERATURE_OVERRIDE ?? THINK_TEMPERATURE_BY_MODE[mode];
+
         const { text } = await runEvalSpan({
           supabase,
           userId: user.id,
@@ -371,13 +388,14 @@ export async function POST(req: Request) {
             wikiContextLength: mirrorWiki?.promptText.length ?? 0,
             coachWebContextLength: coachWeb?.promptText.length ?? 0,
             crossdomainWebContextLength: crossdomainWeb?.promptText.length ?? 0,
+            temperature: modeTemperature,
           },
           fn: () =>
             generateText({
               model,
               system: systemPrompt,
               prompt: question,
-              temperature: THINK_TEMPERATURE,
+              temperature: modeTemperature,
             }),
           outputMapper: (value) => ({
             textPreview: value.text.slice(0, 300),
