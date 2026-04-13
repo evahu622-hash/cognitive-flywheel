@@ -71,8 +71,13 @@ export function getModel(purpose: ModelPurpose): LanguageModel {
  */
 export function getConfiguredModelName(purpose: ModelPurpose): ModelName {
   const envKey = `AI_${purpose.toUpperCase()}_MODEL`;
+  // trim() 兜底 Vercel env var 被粘贴成 "minimax-fast\n" 这种含尾随空白的值,
+  // 否则 MODEL_REGISTRY 查不到会 fallback 到 Object.keys() 的第一个,
+  // 也就是 claude-haiku → 没有 ANTHROPIC_API_KEY → 抛错
+  const raw = process.env[envKey];
+  const trimmed = typeof raw === "string" ? raw.trim() : undefined;
   return (
-    (process.env[envKey] as ModelName | undefined) ??
+    (trimmed && trimmed.length > 0 ? (trimmed as ModelName) : undefined) ??
     PURPOSE_DEFAULTS[purpose]
   );
 }
@@ -91,10 +96,14 @@ const FALLBACK_CHAINS: Record<string, string[]> = {
 };
 
 export function getModelByName(name: string): LanguageModel {
-  const factory = MODEL_REGISTRY[name];
+  // Defensive trim: 同理于 getConfiguredModelName,防止被带空白的字符串绊倒
+  const trimmedName = typeof name === "string" ? name.trim() : name;
+  const factory = MODEL_REGISTRY[trimmedName];
   if (!factory) {
-    console.warn(`Unknown model "${name}", trying fallback chain`);
-    const fallbacks = FALLBACK_CHAINS[name] ?? Object.keys(MODEL_REGISTRY);
+    console.warn(`Unknown model "${trimmedName}" (raw="${name}"), trying fallback chain`);
+    // 默认 fallback 链把 minimax-fast 放最前面,避免无 API key 的 claude-haiku 被误选
+    const fallbacks =
+      FALLBACK_CHAINS[trimmedName] ?? ["minimax-fast", "gpt-4o-mini", "claude-haiku"];
     for (const fallbackName of fallbacks) {
       const fallbackFactory = MODEL_REGISTRY[fallbackName];
       if (fallbackFactory) {
