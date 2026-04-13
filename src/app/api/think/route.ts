@@ -13,6 +13,7 @@ import {
   toJson,
   updateEvalTrace,
 } from "@/lib/evals";
+import { THINK_PHASES, getThinkSystemPrompt } from "@/lib/think-prompts";
 import { runCodeEvaluatorsForTrace } from "@/lib/evaluators";
 import {
   searchKnowledge,
@@ -20,6 +21,19 @@ import {
   type RetrievedKnowledgeItem,
 } from "@/lib/retrieval";
 import { checkRateLimit } from "@/lib/rate-limit";
+import {
+  buildMirrorWikiContext,
+  overrideFigureUrls,
+  type MirrorWikiContext,
+} from "@/lib/think-mirror";
+import {
+  buildCoachWebContext,
+  type CoachWebContext,
+} from "@/lib/think-coach";
+import {
+  buildCrossdomainWebContext,
+  type CrossdomainWebContext,
+} from "@/lib/think-crossdomain";
 
 // Rate limit: 每用户每分钟最多 6 次 think 请求（heavy 操作）
 const THINK_RATE_LIMIT = { windowMs: 60_000, maxRequests: 6 };
@@ -50,132 +64,8 @@ function buildContextPreviewItems(items: RetrievedKnowledgeItem[]) {
   }));
 }
 
-// 各模式的思考阶段动画
-const PHASES: Record<string, string[]> = {
-  roundtable: [
-    "分析你的问题...",
-    "召集专家团...",
-    "多视角深度讨论中...",
-    "提炼关键洞察...",
-  ],
-  coach: [
-    "分析你的认知状态...",
-    "扫描知识盲区...",
-    "生成诊断报告...",
-    "规划学习路径...",
-  ],
-  crossdomain: [
-    "搜索跨领域知识库...",
-    "寻找结构性类比...",
-    "建立跨域关联...",
-    "提炼可迁移的洞察...",
-  ],
-  mirror: [
-    "搜索历史先驱...",
-    "匹配相似困境...",
-    "深入历史案例...",
-    "提炼历史智慧...",
-  ],
-};
-
-// 各模式的系统提示词
-function getSystemPrompt(mode: string, context?: string): string {
-  const contextSection = context
-    ? `\n\n## 用户的知识库上下文（来自记忆层）\n${context}`
-    : "";
-
-  switch (mode) {
-    case "roundtable":
-      return `你是认知飞轮的「圆桌会议」引擎。你的任务是以多位真实专家的视角来分析用户的问题。
-
-## 规则
-1. 选择 3 位与问题最相关的真实历史人物或当代思想家。只使用可验证的真实人物，不确定是否真实存在的人不要使用
-2. 每位专家必须提供与其他人不同甚至冲突的观点
-3. 专家的发言必须符合其本人的思维风格和已知观点
-4. 如果提供了知识库上下文，专家分析中必须明确引用上下文里的具体信息（如"根据你此前关于…的笔记""你之前记录的…"），让用户能看到上下文对分析的实质影响
-5. 在证据不充分时使用"可能""一种观点认为"等措辞，不要把推断说成定论
-6. 最后提炼出可行的关键洞察
-
-## 输出格式（严格JSON，不要markdown代码块）
-{
-  "experts": [
-    {"name": "专家名", "avatar": "单个emoji", "tag": "一句话身份描述", "content": "专家的深度分析，200-300字，必须有具体建议"},
-    {"name": "专家名", "avatar": "单个emoji", "tag": "一句话身份描述", "content": "不同视角的分析"},
-    {"name": "专家名", "avatar": "单个emoji", "tag": "一句话身份描述", "content": "第三个视角"}
-  ],
-  "insights": ["洞察1：具体可行的建议", "洞察2", "洞察3", "洞察4"]
-}${contextSection}`;
-
-    case "coach":
-      return `你是认知飞轮的「认知教练」。你的任务是分析用户的问题，发现其知识盲区，并生成个性化学习路径。
-
-## 规则
-1. 从问题本身推断用户的认知水平和可能的盲区
-2. 盲区要具体可操作，不要泛泛而谈
-3. 学习路径要有时间节点和具体资源（书名、课程、实践方法）
-4. 既要指出不足，也要肯定优势
-5. 如果提供了知识库上下文，必须基于上下文中的具体信息来判断优势和盲区（如"从你关于…的笔记来看"），而非仅凭通用推断
-6. 建议中使用"建议考虑""可能有帮助"等措辞，避免武断的绝对化表述
-
-## 输出格式（严格JSON）
-{
-  "strengths": ["优势1", "优势2", "优势3"],
-  "blindSpots": [
-    {"area": "盲区名称", "severity": "high/medium/low", "detail": "具体描述为什么这是盲区", "suggestion": "具体的学习建议，包括书名或资源"}
-  ],
-  "learningPath": [
-    {"week": "本周", "task": "具体任务", "priority": "高/中/低"},
-    {"week": "下周", "task": "具体任务", "priority": "高/中/低"},
-    {"week": "第3周", "task": "具体任务", "priority": "高/中/低"},
-    {"week": "第4周", "task": "具体任务", "priority": "高/中/低"}
-  ],
-  "insights": ["关键洞察1", "关键洞察2", "关键洞察3"]
-}${contextSection}`;
-
-    case "crossdomain":
-      return `你是认知飞轮的「跨域连接器」。你的任务是从完全不同的领域找到与用户问题结构性相似的概念，建立深度类比。
-
-## 规则
-1. 选择 3 个差异最大的领域（如：生物学、音乐、军事、建筑、经济学、物理学、心理学、体育等）
-2. 类比必须是结构性的（不是表面相似），要解释深层逻辑为什么一样
-3. 每个类比必须给出具体的操作映射：说明 A 中的什么机制与 B 中的什么机制对应，以及如何操作
-4. 类比要让人有"啊哈！"的惊喜感，不要停留在"XX和YY都很重要"的抽象层面
-5. 如果提供了知识库上下文，必须结合上下文中的具体知识来丰富类比
-
-## 输出格式（严格JSON）
-{
-  "connections": [
-    {"domain": "emoji + 领域名", "title": "A ≈ B 的类比标题", "content": "200-300字的深度类比分析，包含具体的可操作启发"},
-    {"domain": "emoji + 领域名", "title": "类比标题", "content": "分析"},
-    {"domain": "emoji + 领域名", "title": "类比标题", "content": "分析"}
-  ],
-  "insights": ["核心洞察1", "核心洞察2", "核心洞察3"]
-}${contextSection}`;
-
-    case "mirror":
-      return `你是认知飞轮的「历史镜鉴」引擎。你的任务是找到历史上面临过类似困境的先驱，分析他们的选择和智慧。
-
-## 规则
-1. 选择 3 位历史人物（可以跨越不同时代和文化），必须是有据可查的真实人物
-2. 他们面临的困境必须与用户的问题有结构性相似
-3. 要讲清楚他们做了什么选择、结果如何、我们可以学到什么
-4. 历史事实要准确，不要编造；具体数字（年份、数量）必须有确信度，不确定时用"约"或"据记载"修饰
-5. 如果提供了知识库上下文，教训部分要结合上下文中的具体信息，使分析对用户更有针对性
-
-## 输出格式（严格JSON）
-{
-  "figures": [
-    {"name": "人物名", "avatar": "单个emoji", "period": "时代", "story": "300字的故事：面临的困境、做出的选择、结果如何", "lesson": "一句话总结的教训"},
-    {"name": "人物名", "avatar": "单个emoji", "period": "时代", "story": "故事", "lesson": "教训"},
-    {"name": "人物名", "avatar": "单个emoji", "period": "时代", "story": "故事", "lesson": "教训"}
-  ],
-  "insights": ["历史智慧1", "历史智慧2", "历史智慧3"]
-}${contextSection}`;
-
-    default:
-      return "分析用户的问题并给出深度回答。";
-  }
-}
+const PHASES = THINK_PHASES;
+const getSystemPrompt = getThinkSystemPrompt;
 
 async function parseThinkResult(
   mode: ThinkRequest["mode"],
@@ -346,12 +236,128 @@ export async function POST(req: Request) {
           console.warn("Think retrieval degraded:", error);
         }
 
-        // 发送首个阶段提示（真实进度，不再模拟假动画）
-        sendEvent({ phase: phases[0] });
+        // 三个 grounded 模式的 pre-LLM pipeline (mirror=Wikipedia, coach/crossdomain=MiniMax web search)
+        let mirrorWiki: MirrorWikiContext | null = null;
+        let coachWeb: CoachWebContext | null = null;
+        let crossdomainWeb: CrossdomainWebContext | null = null;
+
+        if (mode === "mirror") {
+          try {
+            mirrorWiki = await runEvalSpan({
+              supabase,
+              userId: user.id,
+              traceId,
+              spanName: "mirror_wiki_pipeline",
+              inputPayload: {
+                questionPreview: question.slice(0, 200),
+                knowledgeContextLength: finalContextText.length,
+              },
+              fn: () =>
+                buildMirrorWikiContext(
+                  question,
+                  finalContextText,
+                  (phase) => {
+                    if (phase === "candidates")
+                      sendEvent({ phase: phases[0] ?? "推荐历史先驱候选..." });
+                    if (phase === "wikipedia")
+                      sendEvent({
+                        phase: phases[1] ?? "拉取 Wikipedia 事实锚点...",
+                      });
+                  }
+                ),
+              outputMapper: (v) => ({
+                candidateCount: v.candidates.length,
+                wikiHitCount: v.figures.length,
+                unmatched: v.unmatched,
+                wikiFetchOk: v.wikiFetchOk,
+                candidateLLMCallOk: v.candidateLLMCallOk,
+                errorMessage: v.errorMessage,
+              }),
+            });
+          } catch (e) {
+            console.warn("Mirror wiki pipeline failed, falling back:", e);
+          }
+          sendEvent({ phase: phases[2] ?? "基于事实讲述故事..." });
+        } else if (mode === "coach") {
+          try {
+            coachWeb = await runEvalSpan({
+              supabase,
+              userId: user.id,
+              traceId,
+              spanName: "coach_web_pipeline",
+              inputPayload: {
+                questionPreview: question.slice(0, 200),
+                knowledgeContextLength: finalContextText.length,
+              },
+              fn: () =>
+                buildCoachWebContext(
+                  question,
+                  finalContextText,
+                  (phase) => {
+                    if (phase === "topics")
+                      sendEvent({ phase: "抽取学习主题..." });
+                    if (phase === "search")
+                      sendEvent({ phase: "验证真实学习资源..." });
+                  }
+                ),
+              outputMapper: (v) => ({
+                topicCount: v.topics.length,
+                resourceCount: v.resources.length,
+                searchOk: v.searchOk,
+                candidateLLMCallOk: v.candidateLLMCallOk,
+                errorMessage: v.errorMessage,
+              }),
+            });
+          } catch (e) {
+            console.warn("Coach web pipeline failed, falling back:", e);
+          }
+          sendEvent({ phase: phases[2] ?? "生成诊断报告..." });
+        } else if (mode === "crossdomain") {
+          try {
+            crossdomainWeb = await runEvalSpan({
+              supabase,
+              userId: user.id,
+              traceId,
+              spanName: "crossdomain_web_pipeline",
+              inputPayload: {
+                questionPreview: question.slice(0, 200),
+                knowledgeContextLength: finalContextText.length,
+              },
+              fn: () =>
+                buildCrossdomainWebContext(
+                  question,
+                  finalContextText,
+                  (phase) => {
+                    if (phase === "candidates")
+                      sendEvent({ phase: "选择跨域领域..." });
+                    if (phase === "search")
+                      sendEvent({ phase: "拉取跨域素材..." });
+                  }
+                ),
+              outputMapper: (v) => ({
+                domainCount: v.candidates.length,
+                itemCount: v.items.length,
+                searchOk: v.searchOk,
+                candidateLLMCallOk: v.candidateLLMCallOk,
+                errorMessage: v.errorMessage,
+              }),
+            });
+          } catch (e) {
+            console.warn("Crossdomain web pipeline failed, falling back:", e);
+          }
+          sendEvent({ phase: phases[2] ?? "建立跨域关联..." });
+        } else {
+          // 其他模式 (roundtable): 原有首阶段提示
+          sendEvent({ phase: phases[0] });
+        }
 
         // 使用 heavy 模型进行深度思考
         const model = getModel("heavy");
-        const systemPrompt = getSystemPrompt(mode, finalContextText);
+        const systemPrompt = getSystemPrompt(mode, {
+          context: finalContextText,
+          wikiContext: mirrorWiki?.promptText,
+          webContext: coachWeb?.promptText || crossdomainWeb?.promptText,
+        });
 
         const { text } = await runEvalSpan({
           supabase,
@@ -362,6 +368,9 @@ export async function POST(req: Request) {
             mode,
             questionPreview: question.slice(0, 200),
             contextLength: finalContextText.length,
+            wikiContextLength: mirrorWiki?.promptText.length ?? 0,
+            coachWebContextLength: coachWeb?.promptText.length ?? 0,
+            crossdomainWebContextLength: crossdomainWeb?.promptText.length ?? 0,
           },
           fn: () =>
             generateText({
@@ -377,7 +386,11 @@ export async function POST(req: Request) {
 
         sendEvent({ phase: phases[phases.length - 1] ?? "整理回答..." });
 
-        const result = await parseThinkResult(mode, systemPrompt, text);
+        let result = await parseThinkResult(mode, systemPrompt, text);
+        // mirror 模式: 用 Wikipedia canonical URL 覆盖 LLM 输出里的 wikipedia_url
+        if (mode === "mirror" && mirrorWiki && mirrorWiki.figures.length > 0) {
+          result = overrideFigureUrls(result, mirrorWiki.figures);
+        }
 
         const thinkSession = await runEvalSpan({
           supabase,
@@ -417,11 +430,38 @@ export async function POST(req: Request) {
           }),
         });
 
+        const groundingSources = mirrorWiki?.figures.length
+          ? mirrorWiki.figures.map((f) => ({
+              title: f.title,
+              url: f.url,
+              kind: "wikipedia" as const,
+            }))
+          : coachWeb?.resources.length
+            ? coachWeb.resources.map((r) => ({
+                index: r.index,
+                title: r.title,
+                url: r.link,
+                snippet: r.snippet.slice(0, 200),
+                topic: r.topicName,
+                kind: "web" as const,
+              }))
+            : crossdomainWeb?.items.length
+              ? crossdomainWeb.items.map((i) => ({
+                  index: i.index,
+                  title: i.title,
+                  url: i.link,
+                  snippet: i.snippet.slice(0, 200),
+                  domain: i.domain,
+                  kind: "web" as const,
+                }))
+              : [];
+
         const resultPayload = {
           traceId,
           sessionId: thinkSession.id,
           contextItems: retrievedContext.length,
           result,
+          groundingSources,
         };
 
         await updateEvalTrace({
@@ -437,6 +477,59 @@ export async function POST(req: Request) {
             contextPreviewItems,
             retrievalSources: summarizeRetrievalSources(retrievedContext),
             retrievalError,
+            mirrorWiki: mirrorWiki
+              ? {
+                  candidateCount: mirrorWiki.candidates.length,
+                  wikiHitCount: mirrorWiki.figures.length,
+                  unmatched: mirrorWiki.unmatched,
+                  wikiFetchOk: mirrorWiki.wikiFetchOk,
+                  candidateLLMCallOk: mirrorWiki.candidateLLMCallOk,
+                  sources: mirrorWiki.figures.map((f) => ({
+                    title: f.title,
+                    url: f.url,
+                    lang: f.lang,
+                  })),
+                  errorMessage: mirrorWiki.errorMessage,
+                }
+              : null,
+            coachWeb: coachWeb
+              ? {
+                  topicCount: coachWeb.topics.length,
+                  resourceCount: coachWeb.resources.length,
+                  searchOk: coachWeb.searchOk,
+                  candidateLLMCallOk: coachWeb.candidateLLMCallOk,
+                  topics: coachWeb.topics.map((t) => ({
+                    name: t.name,
+                    query: t.query,
+                  })),
+                  sources: coachWeb.resources.map((r) => ({
+                    index: r.index,
+                    title: r.title,
+                    url: r.link,
+                    topic: r.topicName,
+                  })),
+                  errorMessage: coachWeb.errorMessage,
+                }
+              : null,
+            crossdomainWeb: crossdomainWeb
+              ? {
+                  domainCount: crossdomainWeb.candidates.length,
+                  itemCount: crossdomainWeb.items.length,
+                  searchOk: crossdomainWeb.searchOk,
+                  candidateLLMCallOk: crossdomainWeb.candidateLLMCallOk,
+                  candidates: crossdomainWeb.candidates.map((c) => ({
+                    domain: c.domain,
+                    queries: c.queries,
+                  })),
+                  sources: crossdomainWeb.items.map((i) => ({
+                    index: i.index,
+                    title: i.title,
+                    url: i.link,
+                    domain: i.domain,
+                  })),
+                  errorMessage: crossdomainWeb.errorMessage,
+                }
+              : null,
           },
           sessionId: thinkSession.id,
           startedAtMs: requestStartedAtMs,

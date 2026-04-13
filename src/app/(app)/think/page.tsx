@@ -17,11 +17,22 @@ import {
 
 type ThinkMode = "roundtable" | "coach" | "crossdomain" | "mirror" | null;
 
+interface GroundingSource {
+  index?: number;
+  title: string;
+  url: string;
+  snippet?: string;
+  topic?: string;
+  domain?: string;
+  kind: "wikipedia" | "web";
+}
+
 interface ThinkResultEnvelope {
   traceId: string | null;
   sessionId: string | null;
   contextItems: number;
   data: Record<string, unknown>;
+  groundingSources: GroundingSource[];
 }
 
 interface ModeConfig {
@@ -84,6 +95,43 @@ const modes: ModeConfig[] = [
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+function SourcesList({
+  sources,
+  label = "引用来源",
+}: {
+  sources: GroundingSource[];
+  label?: string;
+}) {
+  if (!sources || sources.length === 0) return null;
+  return (
+    <div className="mt-2 border-t pt-3">
+      <div className="text-xs font-medium text-muted-foreground mb-2">
+        🔗 {label} ({sources.length})
+      </div>
+      <ol className="space-y-1.5">
+        {sources.map((src, i) => (
+          <li key={i} className="text-[11px] text-muted-foreground leading-relaxed">
+            <span className="font-mono text-[10px] mr-1">[{src.index ?? i + 1}]</span>
+            <a
+              href={src.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-foreground underline-offset-2 hover:underline"
+            >
+              {src.title}
+            </a>
+            {(src.topic || src.domain) && (
+              <span className="ml-1 text-[10px] opacity-60">
+                · {src.topic ?? src.domain}
+              </span>
+            )}
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
 function RoundtableResult({
   data,
   traceId,
@@ -92,6 +140,7 @@ function RoundtableResult({
   data: any;
   traceId: string | null;
   sessionId: string | null;
+  groundingSources: GroundingSource[];
 }) {
   return (
     <div className="space-y-4">
@@ -118,10 +167,12 @@ function CoachResult({
   data,
   traceId,
   sessionId,
+  groundingSources,
 }: {
   data: any;
   traceId: string | null;
   sessionId: string | null;
+  groundingSources: GroundingSource[];
 }) {
   return (
     <div className="space-y-4">
@@ -179,6 +230,7 @@ function CoachResult({
               </div>
             </div>
           )}
+          <SourcesList sources={groundingSources} label="已验证的学习资源" />
         </CardContent>
       </Card>
       <InsightBox insights={data.insights ?? []} traceId={traceId} sessionId={sessionId} />
@@ -190,10 +242,12 @@ function CrossDomainResult({
   data,
   traceId,
   sessionId,
+  groundingSources,
 }: {
   data: any;
   traceId: string | null;
   sessionId: string | null;
+  groundingSources: GroundingSource[];
 }) {
   return (
     <div className="space-y-4">
@@ -208,6 +262,13 @@ function CrossDomainResult({
           </CardContent>
         </Card>
       ))}
+      {groundingSources.length > 0 && (
+        <Card>
+          <CardContent className="pt-4">
+            <SourcesList sources={groundingSources} label="跨域真实素材" />
+          </CardContent>
+        </Card>
+      )}
       <InsightBox insights={data.insights ?? []} traceId={traceId} sessionId={sessionId} />
     </div>
   );
@@ -221,6 +282,7 @@ function MirrorResult({
   data: any;
   traceId: string | null;
   sessionId: string | null;
+  groundingSources: GroundingSource[];
 }) {
   return (
     <div className="space-y-4">
@@ -238,6 +300,16 @@ function MirrorResult({
             <div className="text-sm font-medium text-amber-700 dark:text-amber-400 italic">
               💡 {item.lesson}
             </div>
+            {item.wikipedia_url && (
+              <a
+                href={item.wikipedia_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-3 inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+              >
+                📖 来源: Wikipedia ↗
+              </a>
+            )}
           </CardContent>
         </Card>
       ))}
@@ -367,6 +439,7 @@ const RESULT_RENDERERS: Record<
     data: Record<string, unknown>;
     traceId: string | null;
     sessionId: string | null;
+    groundingSources: GroundingSource[];
   }>
 > = {
   roundtable: RoundtableResult,
@@ -433,6 +506,9 @@ export default function ThinkPage() {
                 sessionId: payload.sessionId ?? null,
                 contextItems: payload.contextItems ?? 0,
                 data: payload.result ?? {},
+                groundingSources: Array.isArray(payload.groundingSources)
+                  ? payload.groundingSources
+                  : [],
               });
             } else if (payload.phase === "error") {
               setError(payload.error);
@@ -562,6 +638,7 @@ export default function ThinkPage() {
             data={result.data}
             traceId={result.traceId}
             sessionId={result.sessionId}
+            groundingSources={result.groundingSources}
           />
         </div>
       )}
