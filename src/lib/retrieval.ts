@@ -1,11 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "./database.types";
 export { buildKnowledgeSearchText } from "./retrieval-text.mjs";
-import {
-  findSimilarKnowledge,
-  generateEmbedding,
-  isEmbeddingConfigured,
-} from "./embeddings";
 import { createServerSupabase } from "./supabase-server";
 import { generateText } from "ai";
 import { getModel } from "./models";
@@ -15,8 +10,6 @@ type AppSupabase = SupabaseClient<Database>;
 type KnowledgeRow = Database["public"]["Tables"]["knowledge_items"]["Row"];
 type LexicalKnowledgeMatch =
   Database["public"]["Functions"]["search_knowledge_lexical"]["Returns"][number];
-type SemanticKnowledgeMatch =
-  Database["public"]["Functions"]["match_knowledge"]["Returns"][number];
 type KnowledgeSearchFields = Pick<
   KnowledgeRow,
   | "id"
@@ -34,9 +27,11 @@ type KnowledgeSearchFields = Pick<
 
 const FULL_KNOWLEDGE_SELECT =
   "id, type, title, summary, tags, domain, source_url, raw_content, created_at";
-const DEFAULT_SEMANTIC_THRESHOLD = 0.45;
 
-export type RetrievalSource = "lexical" | "semantic" | "hybrid";
+// LLM Index 候选池上限。全文搜索先做粗筛，LLM 对候选池再精排
+const LLM_INDEX_CANDIDATE_LIMIT = 500;
+
+export type RetrievalSource = "lexical" | "llm" | "hybrid";
 
 export interface RetrievedKnowledgeItem {
   id: string;
@@ -50,17 +45,16 @@ export interface RetrievedKnowledgeItem {
   created_at: string;
   retrieval_source: RetrievalSource;
   lexical_score: number | null;
-  similarity: number | null;
+  /** LLM 判定的相关性分数（0-1），null 表示未经 LLM 评分 */
+  llm_relevance: number | null;
 }
 
 interface SearchKnowledgeOptions {
   supabase?: AppSupabase;
   limit?: number;
   domain?: string | null;
-  includeSemantic?: boolean;
-  semanticThreshold?: number;
-  semanticQueryText?: string;
-  queryEmbedding?: number[] | null;
+  /** LLM Index 候选池大小，默认 500，小于 limit 时按 limit 放大 */
+  candidatePoolSize?: number;
 }
 
 function normalizeQueryText(queryText: string) {
@@ -101,52 +95,33 @@ function mapLexicalResult(
     created_at: item.created_at,
     retrieval_source: "lexical",
     lexical_score: "lexical_score" in item ? item.lexical_score ?? null : null,
-    similarity: null,
-  };
-}
-
-function mapSemanticResult(item: SemanticKnowledgeMatch): RetrievedKnowledgeItem {
-  return {
-    id: item.id,
-    type: item.type,
-    title: item.title,
-    summary: item.summary,
-    tags: item.tags ?? [],
-    domain: item.domain,
-    source_url: null,
-    raw_content: null,
-    created_at: item.created_at,
-    retrieval_source: "semantic",
-    lexical_score: null,
-    similarity: item.similarity,
+    llm_relevance: null,
   };
 }
 
 function mergeRetrievedKnowledge(
   lexicalResults: RetrievedKnowledgeItem[],
-  semanticResults: RetrievedKnowledgeItem[]
+  llmResults: RetrievedKnowledgeItem[]
 ) {
-  const semanticById = new Map(
-    semanticResults.map((item) => [item.id, item] as const)
-  );
+  const llmById = new Map(llmResults.map((item) => [item.id, item] as const));
   const hybridResults: RetrievedKnowledgeItem[] = [];
   const lexicalOnlyResults: RetrievedKnowledgeItem[] = [];
 
   for (const item of lexicalResults) {
-    const semanticMatch = semanticById.get(item.id);
-    if (semanticMatch) {
+    const llmMatch = llmById.get(item.id);
+    if (llmMatch) {
       hybridResults.push({
         ...item,
         retrieval_source: "hybrid",
-        similarity: semanticMatch.similarity,
+        llm_relevance: llmMatch.llm_relevance,
       });
-      semanticById.delete(item.id);
+      llmById.delete(item.id);
     } else {
       lexicalOnlyResults.push(item);
     }
   }
 
-  return [...hybridResults, ...lexicalOnlyResults, ...semanticById.values()];
+  return [...hybridResults, ...lexicalOnlyResults, ...llmById.values()];
 }
 
 async function getSupabaseClient(provided?: AppSupabase) {
@@ -261,47 +236,77 @@ export async function searchKnowledgeLexical(
   return (data ?? []).map((item) => mapLexicalResult(item));
 }
 
-// ── LLM Index 搜索 ───────────────────────────────────────────
-// 用 LLM 读取知识库索引，判断哪些条目与查询相关
-// 替代 embedding 语义搜索，理解意图而非仅匹配相似度
+// ============================================================
+// LLM Index 检索：全文粗筛 + LLM 精排
+// 不再使用 embedding 向量检索
+// ============================================================
+
+async function loadCandidatePool(
+  supabase: AppSupabase,
+  queryText: string,
+  poolSize: number,
+  domain?: string | null
+) {
+  // 先用全文搜索做粗筛（扩大 limit，确保召回）
+  const lexicalCandidates = await searchKnowledgeLexical(queryText, {
+    supabase,
+    limit: Math.min(poolSize, 50),
+    domain,
+  });
+  const lexicalIds = new Set(lexicalCandidates.map((item) => item.id));
+
+  // 再按时间倒序补充最近的内容，保证新知识进入候选池
+  let recentQuery = supabase
+    .from("knowledge_items")
+    .select(FULL_KNOWLEDGE_SELECT)
+    .order("created_at", { ascending: false })
+    .limit(poolSize);
+  if (domain) {
+    recentQuery = recentQuery.eq("domain", domain);
+  }
+  const { data: recentItems, error } = await recentQuery;
+  if (error) {
+    console.warn("Candidate pool recent query failed:", error);
+    return lexicalCandidates.map((item) => ({ ...item }));
+  }
+
+  const mergedItems: RetrievedKnowledgeItem[] = [...lexicalCandidates];
+  for (const row of recentItems ?? []) {
+    if (lexicalIds.has(row.id)) continue;
+    mergedItems.push(mapLexicalResult(row));
+  }
+  return mergedItems.slice(0, poolSize);
+}
 
 async function searchKnowledgeByLLMIndex(
   supabase: AppSupabase,
   queryText: string,
   limit: number,
-  domain?: string | null
+  domain?: string | null,
+  candidatePoolSize = LLM_INDEX_CANDIDATE_LIMIT
 ): Promise<RetrievedKnowledgeItem[]> {
-  // 构建 index：每条知识一行摘要
-  let query = supabase
-    .from("knowledge_items")
-    .select("id, type, title, summary, tags, domain, source_url, raw_content, created_at")
-    .order("created_at", { ascending: false })
-    .limit(200); // 最多读 200 条，约 10-20k tokens
-
-  if (domain) {
-    query = query.eq("domain", domain);
-  }
-
-  const { data: items, error } = await query;
-  if (error || !items || items.length === 0) {
+  const poolSize = Math.max(limit * 4, candidatePoolSize);
+  const candidates = await loadCandidatePool(
+    supabase,
+    queryText,
+    poolSize,
+    domain
+  );
+  if (candidates.length === 0) {
     return [];
   }
 
-  // 如果条目很少（<= limit），直接全部返回，不需要 LLM 筛选
-  if (items.length <= limit) {
-    return items.map((item) => ({
+  // 候选池数量 <= limit 直接返回（无需精排）
+  if (candidates.length <= limit) {
+    return candidates.map((item) => ({
       ...item,
-      tags: item.tags ?? [],
-      source_url: item.source_url ?? null,
-      raw_content: item.raw_content ?? null,
-      retrieval_source: "lexical" as RetrievalSource,
-      lexical_score: null,
-      similarity: null,
+      retrieval_source: "llm" as RetrievalSource,
+      llm_relevance: null,
     }));
   }
 
   // 构建 index 文本
-  const indexText = items
+  const indexText = candidates
     .map(
       (item, i) =>
         `[${i}] [${item.domain}] ${item.title} — ${item.summary.slice(0, 80)} #${(item.tags ?? []).join(" #")}`
@@ -312,36 +317,39 @@ async function searchKnowledgeByLLMIndex(
     const model = getModel("light");
     const { text } = await generateText({
       model,
-      system: `你是知识检索引擎。基于用户的查询，从知识索引中找出最相关的条目。
+      system: `你是知识检索引擎。基于用户的查询，从知识索引中找出最相关的条目并给出相关度打分。
 "相关"不仅是表面关键词匹配，更包括：
 - 讨论相同主题但用不同术语的条目
 - 从不同领域提供类似洞察的条目
 - 可以帮助回答查询或提供有价值背景的条目
-只返回 JSON 数组（条目编号），不要包含 markdown 代码块。`,
+只返回 JSON 数组，每项为 {"i": 编号, "score": 0-1 相关度}，不要包含 markdown 代码块。`,
       prompt: `查询: ${queryText.slice(0, 300)}
 
-知识索引（共 ${items.length} 条）:
+知识索引（共 ${candidates.length} 条）:
 ${indexText}
 
-返回最相关的 ${limit} 条的编号，格式: [0, 3, 7]`,
+返回最相关的 ${limit} 条，格式: [{"i":0,"score":0.92},{"i":3,"score":0.81}]`,
     });
 
     const cleaned = cleanAIResponse(text);
-    const indices = JSON.parse(cleaned) as number[];
+    const parsed = JSON.parse(cleaned) as Array<{ i: number; score: number }>;
 
-    if (!Array.isArray(indices)) return [];
+    if (!Array.isArray(parsed)) return [];
 
-    return indices
-      .filter((i) => typeof i === "number" && i >= 0 && i < items.length)
+    return parsed
+      .filter(
+        (r) =>
+          r &&
+          typeof r.i === "number" &&
+          r.i >= 0 &&
+          r.i < candidates.length &&
+          typeof r.score === "number"
+      )
       .slice(0, limit)
-      .map((i) => ({
-        ...items[i],
-        tags: items[i].tags ?? [],
-        source_url: items[i].source_url ?? null,
-        raw_content: items[i].raw_content ?? null,
-        retrieval_source: "semantic" as RetrievalSource, // 标记为 semantic 因为是意图理解
-        lexical_score: null,
-        similarity: 0.8, // LLM 判定相关，给一个默认置信度
+      .map((r) => ({
+        ...candidates[r.i],
+        retrieval_source: "llm" as RetrievalSource,
+        llm_relevance: Math.max(0, Math.min(1, r.score)),
       }));
   } catch (error) {
     console.warn("LLM index search failed:", error);
@@ -361,54 +369,26 @@ export async function searchKnowledge(
     return [];
   }
 
-  // 策略：全文搜索 + LLM Index 搜索（或 Embedding 搜索）并行
-  const lexicalResults = await searchKnowledgeLexical(normalizedQuery, {
-    supabase,
-    limit,
-    domain: options.domain ?? null,
-  });
-
-  let semanticResults: RetrievedKnowledgeItem[] = [];
-
-  // 优先使用 Embedding（如果可用），否则用 LLM Index 搜索
-  const useEmbedding =
-    options.includeSemantic !== false && isEmbeddingConfigured();
-
-  if (useEmbedding) {
-    try {
-      const queryEmbedding =
-        options.queryEmbedding ??
-        (await generateEmbedding(options.semanticQueryText ?? normalizedQuery));
-      const similarKnowledge = await findSimilarKnowledge(queryEmbedding, {
-        limit,
-        threshold: options.semanticThreshold ?? DEFAULT_SEMANTIC_THRESHOLD,
-        domain: options.domain ?? null,
-      });
-
-      semanticResults = similarKnowledge.map((item) => mapSemanticResult(item));
-    } catch (error) {
-      console.warn("Semantic search degraded, falling back to LLM index:", error);
-      semanticResults = await searchKnowledgeByLLMIndex(
-        supabase,
-        normalizedQuery,
-        limit,
-        options.domain ?? null
-      );
-    }
-  } else {
-    // 无 Embedding，使用 LLM Index 搜索
-    semanticResults = await searchKnowledgeByLLMIndex(
+  // 全文搜索 + LLM Index 并行
+  const [lexicalResults, llmResults] = await Promise.all([
+    searchKnowledgeLexical(normalizedQuery, {
+      supabase,
+      limit,
+      domain: options.domain ?? null,
+    }),
+    searchKnowledgeByLLMIndex(
       supabase,
       normalizedQuery,
       limit,
-      options.domain ?? null
-    );
-  }
+      options.domain ?? null,
+      options.candidatePoolSize
+    ),
+  ]);
 
-  const mergedResults = mergeRetrievedKnowledge(
-    lexicalResults,
-    semanticResults
-  ).slice(0, limit);
+  const mergedResults = mergeRetrievedKnowledge(lexicalResults, llmResults).slice(
+    0,
+    limit
+  );
 
   return hydrateKnowledgeResults(supabase, mergedResults);
 }
@@ -419,6 +399,6 @@ export function summarizeRetrievalSources(items: RetrievedKnowledgeItem[]) {
       acc[item.retrieval_source] += 1;
       return acc;
     },
-    { lexical: 0, semantic: 0, hybrid: 0 }
+    { lexical: 0, llm: 0, hybrid: 0 }
   );
 }

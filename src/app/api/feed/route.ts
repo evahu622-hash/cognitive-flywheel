@@ -4,7 +4,6 @@ import { getConfiguredModelName, getModel } from "@/lib/models";
 import { cleanAIResponse } from "@/lib/utils";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { createServerSupabase } from "@/lib/supabase-server";
-import { generateEmbedding, isEmbeddingConfigured } from "@/lib/embeddings";
 import {
   extractFromUrl as extractUrl,
   extractFromPdf,
@@ -30,9 +29,16 @@ import {
 } from "@/lib/knowledge";
 import type { RelationshipResult, SparkResult } from "@/lib/knowledge";
 import { runCompileWithEval } from "@/lib/eval-pipelines";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 // Vercel Serverless 超时配置：feed 管道涉及多步 AI 调用，需要充足时间
 export const maxDuration = 300;
+
+// Rate limit: 每用户每分钟最多 10 次 feed 请求
+const FEED_RATE_LIMIT = { windowMs: 60_000, maxRequests: 10 };
+
+// SSE heartbeat: 每 15s 发一个注释行防止代理断连
+const HEARTBEAT_INTERVAL_MS = 15_000;
 
 // ============================================================
 // POST /api/feed — 认知飞轮 Feed 消化管道
@@ -51,15 +57,16 @@ interface AnalysisResult {
 }
 
 function formatRetrievalReason(item: {
-  retrieval_source: "lexical" | "semantic" | "hybrid";
-  similarity?: number | null;
+  retrieval_source: "lexical" | "llm" | "hybrid";
+  llm_relevance?: number | null;
+  lexical_score?: number | null;
 }) {
   if (item.retrieval_source === "hybrid") {
-    return "关键词 + 语义关联";
+    return "关键词 + LLM 相关";
   }
 
-  if (item.retrieval_source === "semantic" && item.similarity != null) {
-    return `语义相似度 ${(item.similarity * 100).toFixed(0)}%`;
+  if (item.retrieval_source === "llm" && item.llm_relevance != null) {
+    return `LLM 相关度 ${(item.llm_relevance * 100).toFixed(0)}%`;
   }
 
   return "关键词/全文命中";
@@ -93,11 +100,18 @@ export async function POST(req: Request) {
       } else if (ext === "docx" || ext === "doc") {
         input = await extractFromDocx(buffer);
       } else if (["png", "jpg", "jpeg", "gif", "webp"].includes(ext || "")) {
-        // 图片：暂存内容描述，后续接入 vision API
-        input = `[用户上传了图片: ${fileName}]`;
+        // 图片：尚未支持 Vision API，仅当用户同时附带想法时接受
         if (userNote) {
           input = userNote;
           type = "text";
+        } else {
+          return Response.json(
+            {
+              error:
+                "图片内容识别暂未接入。请在「想法」里描述图片要点，或改为粘贴文本/URL。",
+            },
+            { status: 400 }
+          );
         }
       } else {
         // 尝试作为文本文件读取
@@ -130,13 +144,33 @@ export async function POST(req: Request) {
     });
   }
 
-  const hasEmbedding = isEmbeddingConfigured();
   const supabase = await createServerSupabase();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // 限流检查
+  const rateLimit = await checkRateLimit(
+    supabase,
+    user.id,
+    "feed",
+    FEED_RATE_LIMIT
+  );
+  if (!rateLimit.allowed) {
+    return Response.json(
+      {
+        error: `请求过于频繁：每分钟最多 ${rateLimit.maxRequests} 次。请在 ${rateLimit.retryAfterSeconds}s 后重试。`,
+      },
+      {
+        status: 429,
+        headers: {
+          "Retry-After": String(rateLimit.retryAfterSeconds),
+        },
+      }
+    );
   }
 
   const modelName = getConfiguredModelName("light");
@@ -146,7 +180,6 @@ export async function POST(req: Request) {
     fileName: fileName || null,
     inputPreview: input.slice(0, 200),
     userNotePreview: userNote.slice(0, 200),
-    hasEmbedding,
   };
   const traceId = await createEvalTrace({
     supabase,
@@ -166,11 +199,22 @@ export async function POST(req: Request) {
 
   const stream = new ReadableStream({
     async start(controller) {
+      let closed = false;
       function sendEvent(data: Record<string, unknown>) {
+        if (closed) return;
         controller.enqueue(
           encoder.encode(`data: ${JSON.stringify(data)}\n\n`)
         );
       }
+      // 心跳：SSE 注释行，不触发前端 onmessage，只保活连接
+      const heartbeat = setInterval(() => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(`: ping\n\n`));
+        } catch {
+          /* controller may be closed */
+        }
+      }, HEARTBEAT_INTERVAL_MS);
 
       try {
         // Phase 1: 提取内容
@@ -245,40 +289,14 @@ export async function POST(req: Request) {
           }),
         });
 
-        // Phase 3: 构建检索线索
-        let embedding: number[] | null = null;
+        // Phase 3: 检索历史关联（全文搜索 + LLM Index 精排）
         let similar: Awaited<ReturnType<typeof searchKnowledge>> = [];
-        let embeddingError: string | null = null;
         const retrievalText = buildKnowledgeSearchText({
           title: analysis.title,
           summary: analysis.summary,
           tags: analysis.tags,
           rawContent: content,
         });
-
-        if (hasEmbedding) {
-          try {
-            sendEvent({ phase: "生成知识向量..." });
-            embedding = await runEvalSpan({
-              supabase,
-              userId: user.id,
-              traceId,
-              spanName: "generate_embedding",
-              inputPayload: {
-                retrievalTextPreview: retrievalText.slice(0, 300),
-              },
-              fn: () => generateEmbedding(retrievalText),
-              outputMapper: (value) => ({
-                dimensions: value.length,
-              }),
-            });
-          } catch (error) {
-            embeddingError =
-              error instanceof Error ? error.message : String(error);
-            console.warn("Embedding pipeline degraded:", error);
-            sendEvent({ phase: "语义检索不可用，改用关键词关联..." });
-          }
-        }
 
         sendEvent({ phase: "搜索历史关联..." });
         similar = await runEvalSpan({
@@ -287,17 +305,12 @@ export async function POST(req: Request) {
           traceId,
           spanName: "retrieve_similar_knowledge",
           inputPayload: {
-            threshold: 0.5,
             limit: 3,
-            hasEmbedding: Boolean(embedding),
           },
           fn: () =>
             searchKnowledge(retrievalText, {
               supabase,
               limit: 3,
-              semanticThreshold: 0.5,
-              includeSemantic: Boolean(embedding),
-              queryEmbedding: embedding,
             }),
           outputMapper: (value) => ({
             similarCount: value.length,
@@ -334,7 +347,6 @@ export async function POST(req: Request) {
                 raw_content: content.slice(0, 50000),
                 key_points: analysis.keyPoints,
                 ...(userNote ? { user_note: userNote } : {}),
-                ...(embedding ? { embedding: JSON.stringify(embedding) } : {}),
               })
               .select()
               .single();
@@ -363,7 +375,7 @@ export async function POST(req: Request) {
                 from_id: inserted.id,
                 to_id: s.id,
                 connection_type: "similarity" as const,
-                similarity_score: s.similarity,
+                similarity_score: s.llm_relevance ?? s.lexical_score ?? null,
                 reason: formatRetrievalReason(s),
               }));
               const { error } = await supabase
@@ -532,8 +544,6 @@ export async function POST(req: Request) {
           responsePayload: { result: resultPayload },
           metadata: {
             platform: detectedPlatform,
-            hasEmbedding,
-            embeddingError,
             contentLength: content.length,
             contentPreview: content.slice(0, 1200),
             similarCount: similar.length,
@@ -590,6 +600,8 @@ export async function POST(req: Request) {
           });
         }
       } finally {
+        clearInterval(heartbeat);
+        closed = true;
         controller.close();
       }
     },
@@ -626,12 +638,15 @@ async function analyzeContent(content: string, hasUserNote: boolean): Promise<An
     ? `{"type":"article","title":"具体中文标题（包含核心论点或关键对象）","summary":"3-5句话的原文摘要（不包含用户观点）","keyPoints":["原文要点1","原文要点2","原文要点3"],"userOpinions":["用户观点1","用户观点2"],"tags":["标签1","标签2","标签3"],"domain":"领域名"}`
     : `{"type":"article","title":"具体中文标题（包含核心论点或关键对象）","summary":"3-5句话的摘要","keyPoints":["要点1","要点2","要点3"],"tags":["标签1","标签2","标签3"],"domain":"领域名"}`;
 
-  const { text } = await generateText({
-    model,
-    system: `你是认知飞轮的内容分析引擎。分析用户输入的内容，返回 JSON 格式结果。
+  const systemPrompt = `你是认知飞轮的内容分析引擎。分析用户输入的内容，返回 JSON 格式结果。
 
-领域必须是以下之一：投资、Agent Building、健康、一人公司、跨领域
-类型判断规则：
+## 领域判断
+从内容主题归纳一个简洁的中文领域名（2-6 字），例如：投资、Agent Building、健康、一人公司、创业、产品设计、技术、科学、历史、哲学、心理学 等。
+- 优先使用用户已有的领域（若有提示）
+- 跨多个领域或无明确主题时用"跨领域"
+- 不要编造过于细分的领域名
+
+## 类型判断
 - article: 阅读摘要、文章内容
 - thought: 用户自己的想法、反思
 - insight: 从思考中提炼的洞察
@@ -648,7 +663,11 @@ async function analyzeContent(content: string, hasUserNote: boolean): Promise<An
 - 不要使用平台名（如"YouTube""微信"）作为标签
 - 优先使用具体人名、方法论、核心概念作标签
 ${userNoteInstruction}
-只返回合法 JSON，不要包含 markdown 代码块或其他文字。`,
+只返回合法 JSON，不要包含 markdown 代码块或其他文字。`;
+
+  const { text } = await generateText({
+    model,
+    system: systemPrompt,
     prompt: `分析以下内容：
 
 ${content.slice(0, 30000)}
@@ -657,28 +676,99 @@ ${content.slice(0, 30000)}
 ${outputFormat}`,
   });
 
-  const cleaned = cleanAIResponse(text);
+  const parsed = await parseJsonWithRepair(text, systemPrompt, hasUserNote);
+  return validateAnalysisResult(parsed, content);
+}
+
+/** 尝试解析 JSON，失败时用 LLM 修复，仍失败时抛错 */
+async function parseJsonWithRepair(
+  rawText: string,
+  originalSystemPrompt: string,
+  hasUserNote: boolean
+): Promise<Record<string, unknown>> {
+  const cleaned = cleanAIResponse(rawText);
 
   try {
-    return JSON.parse(cleaned);
+    return JSON.parse(cleaned) as Record<string, unknown>;
   } catch {
-    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      try {
-        return JSON.parse(jsonMatch[0]);
-      } catch {
-        // fall through
+    /* fall through */
+  }
+
+  const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+  if (jsonMatch) {
+    try {
+      return JSON.parse(jsonMatch[0]) as Record<string, unknown>;
+    } catch {
+      /* fall through */
+    }
+  }
+
+  // LLM 修复兜底
+  try {
+    const repairModel = getModel("light");
+    const repairResult = await generateText({
+      model: repairModel,
+      system: `${originalSystemPrompt}\n\n你现在是 JSON 修复器。你的唯一任务是把已有内容修复成严格合法的 JSON。不要补充解释，不要输出 markdown 代码块。`,
+      prompt: `请把下面这段输出修复成合法 JSON，保持原意。必须包含字段：type, title, summary, keyPoints (array), tags (array), domain${hasUserNote ? ", userOpinions (array)" : ""}。
+
+${cleaned}`,
+      temperature: 0,
+    });
+    const repaired = cleanAIResponse(repairResult.text);
+    try {
+      return JSON.parse(repaired) as Record<string, unknown>;
+    } catch {
+      const repairedMatch = repaired.match(/\{[\s\S]*\}/);
+      if (repairedMatch) {
+        return JSON.parse(repairedMatch[0]) as Record<string, unknown>;
       }
     }
-    return {
-      type: "article",
-      title: content.slice(0, 30) + "...",
-      summary: content.slice(0, 200),
-      keyPoints: [content.slice(0, 100)],
-      tags: ["未分类"],
-      domain: "跨领域",
-    };
+  } catch (err) {
+    console.warn("JSON repair failed:", err);
   }
+
+  throw new Error("AI 返回格式错误，无法解析为 JSON");
+}
+
+/** 校验并规范化 AI 分析结果 */
+function validateAnalysisResult(
+  parsed: Record<string, unknown>,
+  sourceContent: string
+): AnalysisResult {
+  const type =
+    parsed.type === "thought" || parsed.type === "insight"
+      ? (parsed.type as "thought" | "insight")
+      : "article";
+
+  const asString = (v: unknown, fallback = ""): string =>
+    typeof v === "string" && v.trim() ? v.trim() : fallback;
+
+  const asStringArray = (v: unknown): string[] =>
+    Array.isArray(v)
+      ? v.filter((x): x is string => typeof x === "string" && x.trim().length > 0)
+      : [];
+
+  const result: AnalysisResult = {
+    type,
+    title: asString(parsed.title, sourceContent.slice(0, 30) + "..."),
+    summary: asString(parsed.summary, sourceContent.slice(0, 200)),
+    keyPoints: asStringArray(parsed.keyPoints),
+    tags: asStringArray(parsed.tags),
+    domain: asString(parsed.domain, "跨领域"),
+  };
+
+  if (Array.isArray(parsed.userOpinions)) {
+    result.userOpinions = asStringArray(parsed.userOpinions);
+  }
+
+  if (result.keyPoints.length === 0) {
+    result.keyPoints = [sourceContent.slice(0, 100)];
+  }
+  if (result.tags.length === 0) {
+    result.tags = ["未分类"];
+  }
+
+  return result;
 }
 
 /** Demo 模式降级响应 */

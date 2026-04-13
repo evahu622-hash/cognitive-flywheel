@@ -98,7 +98,8 @@ export async function generateConnectionSpark(
   newItem: { title: string; summary: string; domain: string },
   knowledgeBase: { title: string; summary: string; domain: string }[]
 ): Promise<SparkResult | null> {
-  const model = getModel("heavy");
+  // 用 light 模型控制成本：跨域闪念每次 feed 都触发
+  const model = getModel("light");
 
   // 跨域知识：取不同领域的 items
   const crossDomainItems = knowledgeBase.filter(
@@ -145,6 +146,9 @@ ${isGeneral ? "用户知识库还较少，请基于通用知识生成类比。" 
 // ── Phase 7: 编译触发检查 ─────────────────────────────────────
 
 const COMPILE_THRESHOLD = 5;
+// 已有综述时，只在条目数增长超过此比例才重新编译（避免每次 feed 都触发）
+const RECOMPILE_GROWTH_RATIO = 0.2; // 20%
+const RECOMPILE_MIN_DELTA = 3; // 或至少新增 3 条
 
 export async function checkCompileTrigger(
   supabase: AppSupabase,
@@ -171,12 +175,22 @@ export async function checkCompileTrigger(
     .single();
 
   if (!existing) {
+    // 首次编译
     return { shouldCompile: true, isUpdate: false, itemCount };
   }
 
-  // 如果已有综述但 source 数量少于当前 items，需要增量更新
-  const isStale = (existing.source_ids?.length ?? 0) < itemCount;
-  return { shouldCompile: isStale, isUpdate: true, itemCount };
+  // 已有综述：只有增量足够大时才重编译
+  const previousCount = existing.source_ids?.length ?? 0;
+  const delta = itemCount - previousCount;
+  if (delta <= 0) {
+    return { shouldCompile: false, isUpdate: true, itemCount };
+  }
+
+  const growthRatio = previousCount > 0 ? delta / previousCount : 1;
+  const shouldRecompile =
+    delta >= RECOMPILE_MIN_DELTA || growthRatio >= RECOMPILE_GROWTH_RATIO;
+
+  return { shouldCompile: shouldRecompile, isUpdate: true, itemCount };
 }
 
 // ── 领域综述编译 ──────────────────────────────────────────────
@@ -291,16 +305,20 @@ export interface LintReport {
   totalItems: number;
 }
 
+// Lint 最多加载 500 条知识用于分析，避免 OOM
+const LINT_MAX_ITEMS = 500;
+
 export async function runKnowledgeLint(
   supabase: AppSupabase,
   userId: string
 ): Promise<LintReport> {
-  // 获取所有知识条目
+  // 获取知识条目（上限 LINT_MAX_ITEMS，按时间倒序取最新的）
   const { data: items } = await supabase
     .from("knowledge_items")
     .select("id, title, summary, domain, tags, created_at, updated_at")
     .eq("user_id", userId)
-    .order("created_at", { ascending: false });
+    .order("created_at", { ascending: false })
+    .limit(LINT_MAX_ITEMS);
 
   if (!items || items.length < 5) {
     return {

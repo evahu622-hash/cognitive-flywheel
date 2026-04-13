@@ -5,6 +5,8 @@ import { google } from "@ai-sdk/google";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 
+// Note: embedding 向量检索已废弃，知识检索改为全文搜索 + LLM 精排（见 retrieval.ts）
+
 // ============================================================
 // 统一模型注册表
 // 所有 AI 调用通过此模块获取模型实例，支持环境变量灵活切换
@@ -23,7 +25,8 @@ export type ModelName =
   | "gemini-flash"
   | "gemini-pro"
   | "deepseek"
-  | "minimax";
+  | "minimax"
+  | "minimax-fast";
 
 /** 模型名称 → Vercel AI SDK 模型实例 */
 const MODEL_REGISTRY: Record<string, () => LanguageModel> = {
@@ -56,11 +59,11 @@ const MODEL_REGISTRY: Record<string, () => LanguageModel> = {
   },
 };
 
-/** 各用途的默认模型 */
+/** 各用途的默认模型（可被 env var AI_LIGHT_MODEL / AI_HEAVY_MODEL 覆盖） */
 const PURPOSE_DEFAULTS: Record<ModelPurpose, ModelName> = {
-  light: "claude-haiku",
-  heavy: "claude-sonnet",
-  embed: "gpt-4o-mini", // embed 用途此处不返回 LanguageModel，仅做 fallback 标记
+  light: "minimax-fast",
+  heavy: "minimax-fast",
+  embed: "gpt-4o-mini", // 占位，embedding 已废弃
 };
 
 /**
@@ -117,19 +120,6 @@ export function getModelByName(name: string): LanguageModel {
 }
 
 /**
- * 获取嵌入模型
- * 支持环境变量 AI_EMBED_MODEL 切换
- */
-export function getEmbeddingModel() {
-  const modelName = getEmbeddingModelName();
-  return openai.embedding(modelName);
-}
-
-export function getEmbeddingModelName() {
-  return process.env.AI_EMBED_MODEL ?? "text-embedding-3-small";
-}
-
-/**
  * 获取所有可用模型名称列表（可用于前端下拉选择）
  */
 export function getAvailableModels(): { name: string; label: string }[] {
@@ -143,5 +133,6 @@ export function getAvailableModels(): { name: string; label: string }[] {
     { name: "gemini-pro", label: "Gemini Pro" },
     { name: "deepseek", label: "DeepSeek" },
     { name: "minimax", label: "MiniMax M2.7" },
+    { name: "minimax-fast", label: "MiniMax M2.7 Highspeed" },
   ];
 }

@@ -125,7 +125,6 @@ export async function GET(req: Request) {
         supabase,
         limit: 20,
         domain: domain || null,
-        semanticThreshold: 0.5,
       });
       return Response.json({
         mode: "live",

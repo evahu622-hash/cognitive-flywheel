@@ -14,12 +14,19 @@ import {
   updateEvalTrace,
 } from "@/lib/evals";
 import { runCodeEvaluatorsForTrace } from "@/lib/evaluators";
-import { isEmbeddingConfigured } from "@/lib/embeddings";
 import {
   searchKnowledge,
   summarizeRetrievalSources,
   type RetrievedKnowledgeItem,
 } from "@/lib/retrieval";
+import { checkRateLimit } from "@/lib/rate-limit";
+
+// Rate limit: 每用户每分钟最多 6 次 think 请求（heavy 操作）
+const THINK_RATE_LIMIT = { windowMs: 60_000, maxRequests: 6 };
+// SSE 心跳
+const HEARTBEAT_INTERVAL_MS = 15_000;
+// Think 温度（可通过环境变量覆盖）
+const THINK_TEMPERATURE = Number(process.env.THINK_TEMPERATURE ?? "0.8");
 
 // ============================================================
 // POST /api/think — 四大思考模式 API
@@ -239,7 +246,25 @@ export async function POST(req: Request) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const hasEmbedding = isEmbeddingConfigured();
+  // 限流检查
+  const rateLimit = await checkRateLimit(
+    supabase,
+    user.id,
+    "think",
+    THINK_RATE_LIMIT
+  );
+  if (!rateLimit.allowed) {
+    return Response.json(
+      {
+        error: `思考请求过于频繁：每分钟最多 ${rateLimit.maxRequests} 次。请在 ${rateLimit.retryAfterSeconds}s 后重试。`,
+      },
+      {
+        status: 429,
+        headers: { "Retry-After": String(rateLimit.retryAfterSeconds) },
+      }
+    );
+  }
+
   const modelName = getConfiguredModelName("heavy");
   const traceId = await createEvalTrace({
     supabase,
@@ -252,7 +277,6 @@ export async function POST(req: Request) {
     requestPayload: {
       questionPreview: question.slice(0, 200),
       contextPreview: context?.slice(0, 200) ?? null,
-      hasEmbedding,
     },
     metadata: {
       mode,
@@ -263,11 +287,21 @@ export async function POST(req: Request) {
 
   const stream = new ReadableStream({
     async start(controller) {
+      let closed = false;
       function sendEvent(data: Record<string, unknown>) {
+        if (closed) return;
         controller.enqueue(
           encoder.encode(`data: ${JSON.stringify(data)}\n\n`)
         );
       }
+      const heartbeat = setInterval(() => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(`: ping\n\n`));
+        } catch {
+          /* controller may be closed */
+        }
+      }, HEARTBEAT_INTERVAL_MS);
 
       try {
         let retrievedContext: Awaited<ReturnType<typeof searchKnowledge>> =
@@ -286,14 +320,11 @@ export async function POST(req: Request) {
             inputPayload: {
               questionPreview: question.slice(0, 200),
               limit: 4,
-              threshold: 0.45,
-              hasEmbedding,
             },
             fn: () =>
               searchKnowledge(question, {
                 supabase,
                 limit: 4,
-                semanticThreshold: 0.45,
               }),
             outputMapper: (value) => ({
               matchIds: value.map((item) => item.id),
@@ -315,15 +346,14 @@ export async function POST(req: Request) {
           console.warn("Think retrieval degraded:", error);
         }
 
-        // 发送第一个阶段
+        // 发送首个阶段提示（真实进度，不再模拟假动画）
         sendEvent({ phase: phases[0] });
 
         // 使用 heavy 模型进行深度思考
         const model = getModel("heavy");
         const systemPrompt = getSystemPrompt(mode, finalContextText);
 
-        // 启动 AI 生成（与阶段动画并行）
-        const aiPromise = runEvalSpan({
+        const { text } = await runEvalSpan({
           supabase,
           userId: user.id,
           traceId,
@@ -338,21 +368,14 @@ export async function POST(req: Request) {
               model,
               system: systemPrompt,
               prompt: question,
-              temperature: 0.8, // 稍高温度以获得更有创意的回答
+              temperature: THINK_TEMPERATURE,
             }),
           outputMapper: (value) => ({
             textPreview: value.text.slice(0, 300),
           }),
         });
 
-        // 模拟进度阶段（给 AI 时间生成）
-        for (let i = 1; i < phases.length; i++) {
-          await new Promise((r) => setTimeout(r, 1500));
-          sendEvent({ phase: phases[i] });
-        }
-
-        // 等待 AI 结果
-        const { text } = await aiPromise;
+        sendEvent({ phase: phases[phases.length - 1] ?? "整理回答..." });
 
         const result = await parseThinkResult(mode, systemPrompt, text);
 
@@ -457,6 +480,8 @@ export async function POST(req: Request) {
           error: err instanceof Error ? err.message : String(err),
         });
       } finally {
+        clearInterval(heartbeat);
+        closed = true;
         controller.close();
       }
     },
