@@ -305,20 +305,16 @@ export interface LintReport {
   totalItems: number;
 }
 
-// Lint 最多加载 500 条知识用于分析，避免 OOM
-const LINT_MAX_ITEMS = 500;
-
 export async function runKnowledgeLint(
   supabase: AppSupabase,
   userId: string
 ): Promise<LintReport> {
-  // 获取知识条目（上限 LINT_MAX_ITEMS，按时间倒序取最新的）
+  // 获取所有知识条目
   const { data: items } = await supabase
     .from("knowledge_items")
     .select("id, title, summary, domain, tags, created_at, updated_at")
     .eq("user_id", userId)
-    .order("created_at", { ascending: false })
-    .limit(LINT_MAX_ITEMS);
+    .order("created_at", { ascending: false });
 
   if (!items || items.length < 5) {
     return {
