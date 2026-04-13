@@ -25,7 +25,6 @@ export type ModelName =
   | "gemini-flash"
   | "gemini-pro"
   | "deepseek"
-  | "minimax"
   | "minimax-fast";
 
 /** 模型名称 → Vercel AI SDK 模型实例 */
@@ -40,14 +39,6 @@ const MODEL_REGISTRY: Record<string, () => LanguageModel> = {
   "deepseek": () => {
     const deepseek = createOpenAI({ baseURL: "https://api.deepseek.com/v1", apiKey: process.env.DEEPSEEK_API_KEY });
     return deepseek("deepseek-chat") as LanguageModel;
-  },
-  "minimax": () => {
-    const minimax = createOpenAICompatible({
-      baseURL: "https://api.minimaxi.com/v1",
-      apiKey: process.env.MINIMAX_API_KEY,
-      name: "minimax",
-    });
-    return minimax("MiniMax-M2.7") as LanguageModel;
   },
   "minimax-fast": () => {
     const minimax = createOpenAICompatible({
@@ -92,11 +83,10 @@ export function getConfiguredModelName(purpose: ModelPurpose): ModelName {
  */
 /** 兜底模型链：如果首选模型不可用，按顺序尝试 */
 const FALLBACK_CHAINS: Record<string, string[]> = {
-  "minimax-fast": ["minimax", "gpt-4o-mini", "claude-haiku"],
-  "minimax": ["minimax-fast", "gpt-4o", "claude-sonnet"],
+  "minimax-fast": ["gpt-4o-mini", "claude-haiku"],
   "claude-haiku": ["minimax-fast", "gpt-4o-mini"],
-  "claude-sonnet": ["minimax", "gpt-4o"],
-  "gpt-4o": ["claude-sonnet", "minimax"],
+  "claude-sonnet": ["minimax-fast", "gpt-4o"],
+  "gpt-4o": ["claude-sonnet", "minimax-fast"],
   "gpt-4o-mini": ["claude-haiku", "minimax-fast"],
 };
 
@@ -132,7 +122,6 @@ export function getAvailableModels(): { name: string; label: string }[] {
     { name: "gemini-flash", label: "Gemini Flash (快速)" },
     { name: "gemini-pro", label: "Gemini Pro" },
     { name: "deepseek", label: "DeepSeek" },
-    { name: "minimax", label: "MiniMax M2.7" },
     { name: "minimax-fast", label: "MiniMax M2.7 Highspeed" },
   ];
 }
