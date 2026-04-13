@@ -2,6 +2,7 @@
  * 批量导入 Lenny's 播客和 newsletter 数据到认知飞轮
  *
  * 用法: npx tsx scripts/batch-import-lennys.ts [--podcasts] [--newsletters] [--limit N]
+ *       npx tsx scripts/batch-import-lennys.ts --only-indices <file>   # 只处理指定 1-based 索引
  *
  * 直接通过 AI API + Supabase 插入，跳过 HTTP 层，更高效
  */
@@ -164,17 +165,19 @@ async function importFile(parsed: ParsedFile, index: number, total: number): Pro
     // 兜底：确保关键字段不为 null
     const VALID_DOMAINS = ["投资", "Agent Building", "健康", "一人公司", "跨领域"];
     const domain = VALID_DOMAINS.includes(analysis.domain) ? analysis.domain : "跨领域";
+    const keyPoints = Array.isArray(analysis.keyPoints) ? analysis.keyPoints : [];
+    const title = analysis.title || parsed.title;
 
     const { error } = await supabase.from("knowledge_items").insert({
       user_id: TEST_USER_ID,
       type: analysis.type || "article",
-      title: analysis.title || parsed.title,
+      title,
       summary: analysis.summary || parsed.content.slice(0, 200),
       tags: analysis.tags || [],
       domain,
       source_type: "text",
       raw_content: parsed.content.slice(0, 50000),
-      key_points: analysis.keyPoints,
+      key_points: keyPoints,
     });
 
     if (error) {
@@ -183,7 +186,7 @@ async function importFile(parsed: ParsedFile, index: number, total: number): Pro
     }
 
     console.log(
-      `${label} OK: "${analysis.title.slice(0, 50)}" | ${analysis.keyPoints.length} points | ${analysis.domain}`,
+      `${label} OK: "${title.slice(0, 50)}" | ${keyPoints.length} points | ${domain}`,
     );
     return true;
   } catch (err) {
@@ -199,12 +202,26 @@ async function main() {
   const limitIdx = args.indexOf("--limit");
   const limit = limitIdx >= 0 ? parseInt(args[limitIdx + 1]) : Infinity;
 
+  const onlyIdx = args.indexOf("--only-indices");
+  let onlySet: Set<number> | null = null;
+  if (onlyIdx >= 0) {
+    const file = args[onlyIdx + 1];
+    const raw = fs.readFileSync(file, "utf-8");
+    onlySet = new Set(
+      raw
+        .split(/\s+/)
+        .map((s) => parseInt(s.trim(), 10))
+        .filter((n) => Number.isInteger(n) && n > 0),
+    );
+    console.log(`--only-indices: ${onlySet.size} unique 1-based indices loaded from ${file}`);
+  }
+
   const files: ParsedFile[] = [];
 
   if (doPodcasts) {
     const podDir = path.join(BASE_DIR, "03-podcasts");
     if (fs.existsSync(podDir)) {
-      const podFiles = fs.readdirSync(podDir).filter((f) => f.endsWith(".md"));
+      const podFiles = fs.readdirSync(podDir).filter((f) => f.endsWith(".md")).sort();
       for (const f of podFiles) {
         const parsed = parseMarkdownFile(path.join(podDir, f));
         if (parsed) files.push(parsed);
@@ -216,7 +233,7 @@ async function main() {
   if (doNewsletters) {
     const nlDir = path.join(BASE_DIR, "02-newsletters");
     if (fs.existsSync(nlDir)) {
-      const nlFiles = fs.readdirSync(nlDir).filter((f) => f.endsWith(".md"));
+      const nlFiles = fs.readdirSync(nlDir).filter((f) => f.endsWith(".md")).sort();
       for (const f of nlFiles) {
         const parsed = parseMarkdownFile(path.join(nlDir, f));
         if (parsed) files.push(parsed);
@@ -227,12 +244,22 @@ async function main() {
 
   const toProcess = files.slice(0, limit);
 
-  console.log(`Processing ${toProcess.length} files...\n`);
+  const indicesToRun: number[] = onlySet
+    ? Array.from({ length: toProcess.length }, (_, i) => i).filter((i) => onlySet!.has(i + 1))
+    : Array.from({ length: toProcess.length }, (_, i) => i);
+
+  if (onlySet) {
+    console.log(
+      `Retry mode: processing ${indicesToRun.length} / ${toProcess.length} files (${onlySet.size} requested)`,
+    );
+  } else {
+    console.log(`Processing ${toProcess.length} files...\n`);
+  }
 
   let success = 0;
   let failed = 0;
 
-  for (let i = 0; i < toProcess.length; i++) {
+  for (const i of indicesToRun) {
     const ok = await importFile(toProcess[i], i, toProcess.length);
     if (ok) success++;
     else failed++;
@@ -242,7 +269,7 @@ async function main() {
   }
 
   console.log(`\n=== Import Complete ===`);
-  console.log(`Success: ${success} | Failed: ${failed} | Total: ${toProcess.length}`);
+  console.log(`Success: ${success} | Failed: ${failed} | Attempted: ${indicesToRun.length}`);
 }
 
 main().catch(console.error);
