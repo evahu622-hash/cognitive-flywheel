@@ -2,6 +2,8 @@ import { createServerSupabase } from "@/lib/supabase-server";
 import { getConfiguredModelName } from "@/lib/models";
 import { runLintWithEval } from "@/lib/eval-pipelines";
 
+export const maxDuration = 300;
+
 export async function POST() {
   const requestStartedAtMs = Date.now();
 

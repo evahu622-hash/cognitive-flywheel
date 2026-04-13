@@ -34,25 +34,25 @@ const capabilities = [
     icon: Users,
     zh: "圆桌会议",
     en: "Roundtable",
-    desc: "你只有一个脑子。它帮你开一桌。",
+    desc: "好的决策不诞生于确认，而诞生于被高质量地反对。召集思想家与你辩论，而不是取悦你。",
   },
   {
     icon: GraduationCap,
     zh: "认知教练",
     en: "Cognitive Coach",
-    desc: "你不知道自己不知道什么。它知道。",
+    desc: "真正限制你的，从来不是答不出的问题，而是你从未想过要问的问题。AI 替你画出那张盲区地图。",
   },
   {
     icon: Shuffle,
     zh: "跨域连接",
     en: "Cross-Domain",
-    desc: "人的知识是孤岛。AI 的知识是网络。",
+    desc: "历史上最重要的突破，答案几乎都不在问题所在的领域。AI 在生物学、历史、建筑学之间替你找到结构同构。",
   },
   {
     icon: History,
     zh: "历史镜鉴",
     en: "History Mirror",
-    desc: "你只活几十年。人类智慧积累了几千年。",
+    desc: "太阳底下并无新事。你正在纠结的困境，先驱早已交过答卷——AI 替你在人类几千年的经验里检索。",
   },
 ];
 
@@ -77,15 +77,11 @@ export default function Home() {
         <p className="lp2-mono-label">COGNITIVE FLYWHEEL</p>
 
         <h1 className="lp2-h1">
-          你读过的一切
-          <br />
-          正在等待被<span className="lp2-ink">连接</span>
+          What if AI 能<span className="lp2-ink">替你学习</span>？
         </h1>
 
         <p className="lp2-subhead">
-          不是更强的搜索，是真正会成长的外脑。
-          <br />
-          每一次输入，都让它更懂你。
+          不是知识库，不是搜索，而是真正会成长的外脑
         </p>
 
         <div className="lp2-btn-row">
@@ -170,32 +166,36 @@ export default function Home() {
           <div className="lp2-section-top">
             <p className="lp2-mono-label">THE PROBLEM</p>
             <h2 className="lp2-h2">
-              AI 帮你回答问题
+              人脑有 5 个先天局限
               <br />
-              但没有帮你积累智慧
+              AI 恰好<span className="lp2-ink">全部补齐</span>
             </h2>
             <p className="lp2-body">
-              你和 ChatGPT 聊了一千次，它对你的了解依然为零。你读过的文章、做过的判断、产生的洞察——全部散落在聊天记录里，无法叠加，无法传承。
+              学习是一件反人性的事——对人脑而言。人生有限，知识无限，我们注定学不完。幸运的是，AI 不怕这些。
             </p>
           </div>
 
           <div className="lp2-compare">
             <div className="lp2-compare-card lp2-compare-dim">
-              <p className="lp2-card-eyebrow">传统 AI</p>
-              <h3 className="lp2-card-heading">每次从零开始</h3>
+              <p className="lp2-card-eyebrow">人脑 · Human Brain</p>
+              <h3 className="lp2-card-heading">5 个先天局限</h3>
               <ul className="lp2-card-list">
-                <li>对话结束，记忆清零</li>
-                <li>无法积累你的知识偏好</li>
-                <li>每次都在重新发现</li>
+                <li>记忆衰减 — 一篇文章，3 天后只剩 10%</li>
+                <li>算力有限 — 几千年智慧，几十年人生学不完</li>
+                <li>带宽有限 — 学多了就过载，无法并行</li>
+                <li>连接有限 — 各领域知识是孤岛</li>
+                <li>盲区不自知 — 不知道自己不知道什么</li>
               </ul>
             </div>
             <div className="lp2-compare-card lp2-compare-bright">
-              <p className="lp2-card-eyebrow lp2-eyebrow-accent">认知飞轮</p>
-              <h3 className="lp2-card-heading">知识持续积累</h3>
+              <p className="lp2-card-eyebrow lp2-eyebrow-accent">LLM · 大语言模型</p>
+              <h3 className="lp2-card-heading">5 个天生优势</h3>
               <ul className="lp2-card-list lp2-list-accent">
-                <li>每次输入都沉淀为记忆</li>
-                <li>越用越懂你的思维方式</li>
-                <li>洞察在时间中自我叠加</li>
+                <li>持久记忆 — 读过的永不遗忘，精准召回</li>
+                <li>超强算力 — 同时推理上万条信息</li>
+                <li>带宽无限 — 一次消化一整本书不过载</li>
+                <li>跨域连接 — 天然在领域间找关联</li>
+                <li>海量知识 — 看见你看不见的盲区</li>
               </ul>
             </div>
           </div>
@@ -208,12 +208,12 @@ export default function Home() {
           <div className="lp2-section-top">
             <p className="lp2-mono-label">THE INSIGHT</p>
             <h2 className="lp2-h2">
-              知识不是存储的问题
+              知识不仅要存储
               <br />
-              是「<span className="lp2-ink">连接</span>」的问题
+              更需要更好地「<span className="lp2-ink">连接和调用</span>」
             </h2>
             <p className="lp2-body">
-              你的大脑不缺信息，缺的是把孤立信息编织成网络的能力。认知飞轮做的，是替你完成这个编织的过程。
+              你的大脑不缺信息，缺的是把孤立信息编织成网络、并在需要的时候精准调用的能力。认知飞轮替你跑完这整条流水线。
             </p>
           </div>
 
@@ -221,19 +221,31 @@ export default function Home() {
             <div className="lp2-step">
               <span className="lp2-step-num">01</span>
               <h3 className="lp2-step-title">喂入</h3>
-              <p className="lp2-step-desc">文章、链接、想法、对话——任何形式的知识</p>
+              <p className="lp2-step-desc">文章、链接、PDF、对话——任何形式的原始知识</p>
             </div>
             <div className="lp2-step-arrow" aria-hidden="true">→</div>
             <div className="lp2-step">
               <span className="lp2-step-num">02</span>
-              <h3 className="lp2-step-title">记忆</h3>
-              <p className="lp2-step-desc">提炼要点，打标签，关联已有知识，建立连接</p>
+              <h3 className="lp2-step-title">消化</h3>
+              <p className="lp2-step-desc">AI 提炼核心观点，识别矛盾，标注疑问</p>
             </div>
             <div className="lp2-step-arrow" aria-hidden="true">→</div>
             <div className="lp2-step">
               <span className="lp2-step-num">03</span>
+              <h3 className="lp2-step-title">连接</h3>
+              <p className="lp2-step-desc">自动挂接到你已有的知识网络，找到关联与类比</p>
+            </div>
+            <div className="lp2-step-arrow" aria-hidden="true">→</div>
+            <div className="lp2-step">
+              <span className="lp2-step-num">04</span>
+              <h3 className="lp2-step-title">记忆</h3>
+              <p className="lp2-step-desc">沉淀为长期记忆，按领域归档，永不遗忘</p>
+            </div>
+            <div className="lp2-step-arrow" aria-hidden="true">→</div>
+            <div className="lp2-step">
+              <span className="lp2-step-num">05</span>
               <h3 className="lp2-step-title">思考</h3>
-              <p className="lp2-step-desc">从积累的知识出发，深度加工，生成洞察</p>
+              <p className="lp2-step-desc">决策时自动调用上下文，生成个性化洞察</p>
             </div>
           </div>
         </div>
@@ -276,7 +288,6 @@ export default function Home() {
             <br />
             你的外脑
           </h2>
-          <p className="lp2-final-sub">越早开始，飞轮转得越快。</p>
           <Link href="/auth/login" className="lp2-btn lp2-btn-indigo lp2-btn-lg">
             立即体验 <ArrowRight size={16} />
           </Link>

@@ -1,6 +1,83 @@
+import { NextRequest } from "next/server";
 import { createServerSupabase } from "@/lib/supabase-server";
 import { MOCK_KNOWLEDGE } from "@/lib/mock-data";
 import { searchKnowledge, summarizeRetrievalSources } from "@/lib/retrieval";
+
+// ============================================================
+// DELETE /api/knowledge — 删除知识条目
+// ============================================================
+
+export async function DELETE(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+  const id = searchParams.get("id");
+  if (!id) {
+    return Response.json({ error: "缺少 id 参数" }, { status: 400 });
+  }
+
+  const supabase = await createServerSupabase();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) {
+    return Response.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // 先删关联
+  await supabase
+    .from("knowledge_connections")
+    .delete()
+    .or(`from_id.eq.${id},to_id.eq.${id}`);
+
+  const { error } = await supabase
+    .from("knowledge_items")
+    .delete()
+    .eq("id", id)
+    .eq("user_id", user.id);
+
+  if (error) {
+    return Response.json({ error: error.message }, { status: 500 });
+  }
+
+  return Response.json({ success: true });
+}
+
+// ============================================================
+// PATCH /api/knowledge — 更新知识条目（补充用户观点等）
+// ============================================================
+
+export async function PATCH(req: NextRequest) {
+  const body = await req.json();
+  const { id, user_note } = body;
+
+  if (!id) {
+    return Response.json({ error: "缺少 id 参数" }, { status: 400 });
+  }
+
+  const supabase = await createServerSupabase();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) {
+    return Response.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const updates: Record<string, unknown> = {};
+  if (user_note !== undefined) updates.user_note = user_note;
+
+  if (Object.keys(updates).length === 0) {
+    return Response.json({ error: "没有要更新的字段" }, { status: 400 });
+  }
+
+  const { data, error } = await supabase
+    .from("knowledge_items")
+    .update(updates)
+    .eq("id", id)
+    .eq("user_id", user.id)
+    .select()
+    .single();
+
+  if (error) {
+    return Response.json({ error: error.message }, { status: 500 });
+  }
+
+  return Response.json({ item: data });
+}
 
 // ============================================================
 // GET /api/knowledge — 知识库查询
@@ -63,7 +140,7 @@ export async function GET(req: Request) {
   // 常规查询
   let query = supabase
     .from("knowledge_items")
-    .select("id, type, title, summary, tags, domain, source_url, raw_content, created_at")
+    .select("id, type, title, summary, tags, domain, source_url, raw_content, key_points, user_note, created_at")
     .order("created_at", { ascending: false })
     .limit(50);
 

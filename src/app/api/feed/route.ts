@@ -9,6 +9,7 @@ import {
   extractFromUrl as extractUrl,
   extractFromPdf,
   extractFromDocx,
+  ExtractionError,
 } from "@/lib/extract";
 import {
   buildKnowledgeSearchText,
@@ -30,6 +31,9 @@ import {
 import type { RelationshipResult, SparkResult } from "@/lib/knowledge";
 import { runCompileWithEval } from "@/lib/eval-pipelines";
 
+// Vercel Serverless 超时配置：feed 管道涉及多步 AI 调用，需要充足时间
+export const maxDuration = 300;
+
 // ============================================================
 // POST /api/feed — 认知飞轮 Feed 消化管道
 // 支持：文本 / URL / 文件上传（PDF/DOCX/图片）
@@ -41,6 +45,7 @@ interface AnalysisResult {
   title: string;
   summary: string;
   keyPoints: string[];
+  userOpinions?: string[];
   tags: string[];
   domain: string;
 }
@@ -96,7 +101,7 @@ export async function POST(req: Request) {
         }
       } else {
         // 尝试作为文本文件读取
-        input = new TextDecoder().decode(buffer).slice(0, 10000);
+        input = new TextDecoder().decode(buffer).slice(0, 50000);
       }
     } else if (url) {
       type = "url";
@@ -230,7 +235,7 @@ export async function POST(req: Request) {
             contentLength: content.length,
             hasUserNote: Boolean(userNote),
           },
-          fn: () => analyzeContent(content),
+          fn: () => analyzeContent(content, Boolean(userNote)),
           outputMapper: (value) => ({
             type: value.type,
             title: value.title,
@@ -326,7 +331,9 @@ export async function POST(req: Request) {
                 domain: analysis.domain,
                 source_url: sourceUrl,
                 source_type: type === "file" ? "text" : type,
-                raw_content: content.slice(0, 10000),
+                raw_content: content.slice(0, 50000),
+                key_points: analysis.keyPoints,
+                ...(userNote ? { user_note: userNote } : {}),
                 ...(embedding ? { embedding: JSON.stringify(embedding) } : {}),
               })
               .select()
@@ -506,6 +513,7 @@ export async function POST(req: Request) {
           title: analysis.title,
           summary: analysis.summary,
           keyPoints: analysis.keyPoints,
+          userOpinions: analysis.userOpinions,
           tags: analysis.tags,
           domain: analysis.domain,
           connections: similar.map(
@@ -568,10 +576,19 @@ export async function POST(req: Request) {
           errorMessage: err instanceof Error ? err.message : String(err),
           startedAtMs: requestStartedAtMs,
         });
-        sendEvent({
-          phase: "error",
-          error: err instanceof Error ? err.message : String(err),
-        });
+        // ExtractionError 附带用户友好提示
+        if (err instanceof ExtractionError) {
+          sendEvent({
+            phase: "extraction_failed",
+            error: err.userHint,
+            detail: err.message,
+          });
+        } else {
+          sendEvent({
+            phase: "error",
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       } finally {
         controller.close();
       }
@@ -592,8 +609,22 @@ export async function POST(req: Request) {
 // ============================================================
 
 /** AI 内容分析 */
-async function analyzeContent(content: string): Promise<AnalysisResult> {
+async function analyzeContent(content: string, hasUserNote: boolean): Promise<AnalysisResult> {
   const model = getModel("light");
+
+  const userNoteInstruction = hasUserNote
+    ? `
+## 用户观点分离（重要）
+内容中"---"分隔线之后的"用户的想法和批注"部分是用户自己的评论。你必须：
+- keyPoints 只包含原文/文章本身的核心观点，不受用户批注影响
+- summary 只总结原文内容
+- 用户的想法、评价、质疑、感受放到单独的 userOpinions 数组中
+- 如果用户的批注中包含有价值的判断或质疑，提炼为简洁的观点放入 userOpinions`
+    : "";
+
+  const outputFormat = hasUserNote
+    ? `{"type":"article","title":"具体中文标题（包含核心论点或关键对象）","summary":"3-5句话的原文摘要（不包含用户观点）","keyPoints":["原文要点1","原文要点2","原文要点3"],"userOpinions":["用户观点1","用户观点2"],"tags":["标签1","标签2","标签3"],"domain":"领域名"}`
+    : `{"type":"article","title":"具体中文标题（包含核心论点或关键对象）","summary":"3-5句话的摘要","keyPoints":["要点1","要点2","要点3"],"tags":["标签1","标签2","标签3"],"domain":"领域名"}`;
 
   const { text } = await generateText({
     model,
@@ -616,16 +647,14 @@ async function analyzeContent(content: string): Promise<AnalysisResult> {
 - 不得用中英文重复表达同一概念（如同时出现"LLM"和"大语言模型"）
 - 不要使用平台名（如"YouTube""微信"）作为标签
 - 优先使用具体人名、方法论、核心概念作标签
-
-如果内容包含"用户的想法和批注"部分，请同时考虑原文和用户批注来生成摘要。
-
+${userNoteInstruction}
 只返回合法 JSON，不要包含 markdown 代码块或其他文字。`,
     prompt: `分析以下内容：
 
-${content.slice(0, 4000)}
+${content.slice(0, 30000)}
 
 返回格式：
-{"type":"article","title":"具体中文标题（包含核心论点或关键对象）","summary":"3-5句话的摘要","keyPoints":["要点1","要点2","要点3"],"tags":["标签1","标签2","标签3"],"domain":"领域名"}`,
+${outputFormat}`,
   });
 
   const cleaned = cleanAIResponse(text);

@@ -488,24 +488,32 @@
   gap: 0;
   flex-wrap: wrap;
 }
+/* 5-step layout: force fit on desktop (container max-width: 900px) */
 .lp2-step {
-  flex: 1;
-  min-width: 200px;
-  max-width: 260px;
-  padding: 2rem 1.75rem;
+  flex: 1 1 0;
+  min-width: 130px;
+  max-width: 150px;
+  padding: 1.25rem 0.9rem;
   background: #fff;
   border: 1px solid var(--lp2-border);
   border-radius: 12px;
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  gap: 0.4rem;
 }
 .lp2-step-arrow {
-  padding: 0 1rem;
-  font-size: 18px;
+  padding: 0 0.25rem;
+  font-size: 14px;
   color: rgba(79,70,229,0.35);
   align-self: center;
   flex-shrink: 0;
+}
+.lp2-step-title {
+  font-size: 1.02rem !important;
+}
+.lp2-step-desc {
+  font-size: 12.5px !important;
+  line-height: 1.55 !important;
 }
 @media (max-width: 640px) {
   .lp2-step-arrow { display: none; }

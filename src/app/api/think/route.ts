@@ -3,6 +3,8 @@ import { getConfiguredModelName, getModel } from "@/lib/models";
 import { cleanAIResponse } from "@/lib/utils";
 import { createServerSupabase } from "@/lib/supabase-server";
 import type { Database, Json } from "@/lib/database.types";
+
+export const maxDuration = 300;
 import {
   buildKnowledgeContextText,
   createEvalTrace,

@@ -23,6 +23,8 @@ import {
   File,
   Zap,
   ArrowLeftRight,
+  AlertTriangle,
+  MessageSquare,
 } from "lucide-react";
 
 interface SparkResult {
@@ -44,6 +46,7 @@ interface DigestResult {
   type: string;
   title: string;
   keyPoints: string[];
+  userOpinions?: string[];
   tags: string[];
   domain: string;
   connections: string[];
@@ -78,6 +81,10 @@ export default function FeedPage() {
   const [digestPhase, setDigestPhase] = useState("");
   const [results, setResults] = useState<DigestResult[]>([]);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [extractionError, setExtractionError] = useState<{
+    hint: string;
+    detail: string;
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isValidUrl = url.trim().startsWith("http://") || url.trim().startsWith("https://");
@@ -87,6 +94,7 @@ export default function FeedPage() {
     if (!url.trim() && !note.trim() && !file) return;
     setIsDigesting(true);
     setDigestPhase("正在连接外脑...");
+    setExtractionError(null);
 
     try {
       let res: Response;
@@ -145,6 +153,12 @@ export default function FeedPage() {
                 setResults((prev) => [payload.result, ...prev]);
                 setShowSuccess(true);
                 setTimeout(() => setShowSuccess(false), 3000);
+              } else if (payload.phase === "extraction_failed") {
+                setDigestPhase("");
+                setExtractionError({
+                  hint: payload.error,
+                  detail: payload.detail,
+                });
               } else if (payload.phase === "error") {
                 setDigestPhase(`出错: ${payload.error}`);
               } else {
@@ -196,6 +210,34 @@ export default function FeedPage() {
           <span className="text-sm font-medium text-green-700 dark:text-green-300">
             消化完成，已存入记忆层
           </span>
+        </div>
+      )}
+
+      {/* Extraction Failed Banner */}
+      {extractionError && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-950/30 px-4 py-3 space-y-1.5">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
+            <span className="text-sm font-medium text-amber-700 dark:text-amber-300">
+              内容提取失败
+            </span>
+          </div>
+          <p className="text-sm text-amber-700 dark:text-amber-300">
+            {extractionError.hint}
+          </p>
+          {extractionError.detail && (
+            <p className="text-xs text-amber-600/70 dark:text-amber-400/70">
+              原因：{extractionError.detail}
+            </p>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-xs h-7 px-2"
+            onClick={() => setExtractionError(null)}
+          >
+            关闭
+          </Button>
         </div>
       )}
 
@@ -327,7 +369,7 @@ export default function FeedPage() {
                 <div>
                   <div className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground mb-2">
                     <Brain className="h-4 w-4" />
-                    核心观点
+                    {result.userOpinions && result.userOpinions.length > 0 ? "文章要点" : "核心观点"}
                   </div>
                   <ul className="space-y-1.5">
                     {result.keyPoints.map((point, i) => (
@@ -338,6 +380,23 @@ export default function FeedPage() {
                     ))}
                   </ul>
                 </div>
+
+                {result.userOpinions && result.userOpinions.length > 0 && (
+                  <div>
+                    <div className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground mb-2">
+                      <MessageSquare className="h-4 w-4" />
+                      我的观点
+                    </div>
+                    <ul className="space-y-1.5 pl-0.5">
+                      {result.userOpinions.map((opinion, i) => (
+                        <li key={i} className="text-sm flex items-start gap-2">
+                          <span className="h-3.5 w-3.5 mt-0.5 shrink-0 flex items-center justify-center text-blue-500 text-xs font-bold">💭</span>
+                          {opinion}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
 
                 <div>
                   <div className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground mb-2">

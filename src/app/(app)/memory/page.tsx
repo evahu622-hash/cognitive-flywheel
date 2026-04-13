@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Search,
   FileText,
@@ -21,6 +22,13 @@ import {
   Unlink,
   Clock,
   Eye,
+  Trash2,
+  MessageSquarePlus,
+  Save,
+  X,
+  Brain,
+  Tag,
+  Check,
 } from "lucide-react";
 import { MOCK_KNOWLEDGE, type KnowledgeItem } from "@/lib/mock-data";
 
@@ -55,13 +63,21 @@ interface DomainSummary {
   last_compiled_at: string;
 }
 
+// 扩展 KnowledgeItem 以包含新字段
+interface MemoryItem extends KnowledgeItem {
+  sourceUrl?: string | null;
+  rawContent?: string | null;
+  key_points?: string[] | null;
+  user_note?: string | null;
+}
+
 export default function MemoryPage() {
   const [search, setSearch] = useState("");
   const [activeDomain, setActiveDomain] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [items, setItems] = useState<KnowledgeItem[]>(MOCK_KNOWLEDGE);
-  const [isLoading, setIsLoading] = useState(false);
-  const [stats, setStats] = useState({ total: 42, thoughts: 18, connections: 15 });
+  const [items, setItems] = useState<MemoryItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [stats, setStats] = useState({ total: 0, thoughts: 0, connections: 0 });
 
   // Health Check state
   const [lintReport, setLintReport] = useState<LintReport | null>(null);
@@ -72,6 +88,56 @@ export default function MemoryPage() {
   const [summaries, setSummaries] = useState<DomainSummary[]>([]);
   const [expandedSummary, setExpandedSummary] = useState<string | null>(null);
   const [compilingDomain, setCompilingDomain] = useState<string | null>(null);
+
+  // Delete & Edit state
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [noteText, setNoteText] = useState("");
+
+  const handleDelete = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm("确定要删除这条知识吗？删除后无法恢复。")) return;
+    setDeletingId(id);
+    try {
+      const res = await fetch(`/api/knowledge?id=${id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (data.success) {
+        setItems((prev) => prev.filter((item) => item.id !== id));
+        setStats((prev) => ({ ...prev, total: prev.total - 1 }));
+      }
+    } catch {
+      // silent fail
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const startEditNote = (item: MemoryItem, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingNoteId(item.id);
+    setNoteText(item.user_note || "");
+  };
+
+  const saveNote = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await fetch("/api/knowledge", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, user_note: noteText }),
+      });
+      setItems((prev) =>
+        prev.map((item) =>
+          item.id === id ? { ...item, user_note: noteText } : item
+        )
+      );
+    } catch {
+      // silent fail
+    } finally {
+      setEditingNoteId(null);
+      setNoteText("");
+    }
+  };
 
   const runHealthCheck = async () => {
     setIsLinting(true);
@@ -133,14 +199,15 @@ export default function MemoryPage() {
       if (domain) params.set("domain", domain);
       const res = await fetch(`/api/knowledge?${params}`);
       const data = await res.json();
-      // 标准化字段名（Supabase 返回 snake_case，mock 用 camelCase）
       const normalized = (data.items ?? []).map((item: Record<string, unknown>) => ({
         ...item,
         createdAt: item.createdAt ?? item.created_at ?? "",
         connections: item.connections ?? [],
         sourceUrl: item.sourceUrl ?? item.source_url ?? null,
         rawContent: item.rawContent ?? item.raw_content ?? null,
-      })) as KnowledgeItem[];
+        key_points: item.key_points ?? null,
+        user_note: item.user_note ?? null,
+      })) as MemoryItem[];
       setItems(normalized);
     } catch {
       // API 失败时保留当前数据
@@ -218,7 +285,217 @@ export default function MemoryPage() {
         </Card>
       </div>
 
-      {/* Health Check + Domain Summaries */}
+      {/* Domain Filter */}
+      <div>
+        <div className="flex items-center gap-2 mb-2 text-sm text-muted-foreground">
+          <Filter className="h-4 w-4" />
+          按领域筛选
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            variant={activeDomain === null ? "default" : "outline"}
+            onClick={() => setActiveDomain(null)}
+          >
+            全部
+          </Button>
+          {domains.map((domain) => (
+            <Button
+              key={domain}
+              size="sm"
+              variant={activeDomain === domain ? "default" : "outline"}
+              onClick={() => setActiveDomain(activeDomain === domain ? null : domain)}
+            >
+              {domain}
+            </Button>
+          ))}
+        </div>
+      </div>
+
+      {/* Knowledge Digest Cards */}
+      <div className="space-y-3">
+        {items.map((item) => {
+          const config = typeConfig[item.type] ?? typeConfig.article;
+          const isExpanded = expandedId === item.id;
+          const keyPoints = item.key_points ?? [];
+          const isEditingThis = editingNoteId === item.id;
+
+          return (
+            <Card
+              key={item.id}
+              className={`cursor-pointer transition-all duration-200 ${
+                isExpanded ? "shadow-md ring-1 ring-border" : "hover:shadow-md"
+              }`}
+              onClick={() => setExpandedId(isExpanded ? null : item.id)}
+            >
+              <CardContent className="pt-5 pb-4 space-y-3">
+                {/* Header: Title + Domain */}
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-2 min-w-0">
+                    <Check className="h-4 w-4 text-green-500 mt-0.5 shrink-0" />
+                    <span className="font-semibold text-sm leading-snug">{item.title}</span>
+                  </div>
+                  <Badge variant="outline" className="shrink-0 text-xs">
+                    {item.domain}
+                  </Badge>
+                </div>
+
+                {/* Key Points Preview (collapsed: 2, expanded: all) */}
+                {keyPoints.length > 0 ? (
+                  <div>
+                    <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground mb-1.5">
+                      <Brain className="h-3.5 w-3.5" />
+                      核心观点
+                    </div>
+                    <ul className="space-y-1">
+                      {(isExpanded ? keyPoints : keyPoints.slice(0, 2)).map((point, i) => (
+                        <li key={i} className="text-sm flex items-start gap-2">
+                          <Sparkles className="h-3.5 w-3.5 mt-0.5 text-amber-500 shrink-0" />
+                          <span className="leading-relaxed">{point}</span>
+                        </li>
+                      ))}
+                      {!isExpanded && keyPoints.length > 2 && (
+                        <li className="text-xs text-muted-foreground pl-5.5">
+                          +{keyPoints.length - 2} 条更多观点...
+                        </li>
+                      )}
+                    </ul>
+                  </div>
+                ) : (
+                  /* Fallback: show summary if no key_points */
+                  <p className="text-sm text-muted-foreground leading-relaxed">
+                    {isExpanded ? item.summary : (item.summary?.slice(0, 120) + (item.summary?.length > 120 ? "..." : ""))}
+                  </p>
+                )}
+
+                {/* Tags */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <Tag className="h-3 w-3 text-muted-foreground shrink-0" />
+                  {(item.tags ?? []).map((tag) => (
+                    <Badge key={tag} variant="secondary" className="text-xs">
+                      #{tag}
+                    </Badge>
+                  ))}
+                </div>
+
+                {/* === Expanded Details === */}
+                {isExpanded && (
+                  <div className="pt-3 border-t space-y-4">
+                    {/* User Note Display / Edit */}
+                    {isEditingThis ? (
+                      <div className="space-y-2" onClick={(e) => e.stopPropagation()}>
+                        <div className="text-xs font-medium text-muted-foreground">我的评价/观点</div>
+                        <Textarea
+                          value={noteText}
+                          onChange={(e) => setNoteText(e.target.value)}
+                          placeholder="记录你对这条知识的想法、评价或补充..."
+                          rows={3}
+                          className="text-sm"
+                        />
+                        <div className="flex gap-2">
+                          <Button size="sm" className="h-7 text-xs" onClick={(e) => saveNote(item.id, e)}>
+                            <Save className="h-3 w-3 mr-1" />保存
+                          </Button>
+                          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={(e) => { e.stopPropagation(); setEditingNoteId(null); }}>
+                            <X className="h-3 w-3 mr-1" />取消
+                          </Button>
+                        </div>
+                      </div>
+                    ) : item.user_note ? (
+                      <div>
+                        <div className="text-xs font-medium text-muted-foreground mb-1">我的评价</div>
+                        <div className="text-sm bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-3 whitespace-pre-wrap leading-relaxed">
+                          {item.user_note}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {/* Summary (shown in expanded if key_points exist) */}
+                    {keyPoints.length > 0 && item.summary && (
+                      <div>
+                        <div className="text-xs font-medium text-muted-foreground mb-1">内容摘要</div>
+                        <p className="text-sm text-muted-foreground leading-relaxed">{item.summary}</p>
+                      </div>
+                    )}
+
+                    {/* Raw content */}
+                    {item.rawContent && (
+                      <div>
+                        <div className="text-xs font-medium text-muted-foreground mb-1">原文内容</div>
+                        <div className="text-sm text-muted-foreground bg-muted/50 rounded-lg p-3 max-h-48 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+                          {item.rawContent.slice(0, 2000)}
+                          {item.rawContent.length > 2000 && "..."}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Actions bar */}
+                    <div className="flex items-center gap-2 pt-1">
+                      {item.sourceUrl && (
+                        <a
+                          href={item.sourceUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-xs hover:underline"
+                          style={{ color: "var(--flywheel)" }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <ExternalLink className="h-3 w-3" />
+                          查看原文
+                        </a>
+                      )}
+                      <div className="flex-1" />
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2 text-xs text-muted-foreground hover:text-blue-600"
+                        onClick={(e) => startEditNote(item, e)}
+                      >
+                        <MessageSquarePlus className="h-3.5 w-3.5 mr-1" />
+                        {item.user_note ? "编辑评价" : "添加评价"}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2 text-xs text-muted-foreground hover:text-red-600"
+                        disabled={deletingId === item.id}
+                        onClick={(e) => handleDelete(item.id, e)}
+                      >
+                        {deletingId === item.id ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <><Trash2 className="h-3.5 w-3.5 mr-1" />删除</>
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Footer: date + expand */}
+                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                  <div className="flex items-center gap-2">
+                    <config.icon className={`h-3 w-3 ${config.color}`} />
+                    <span>{config.label}</span>
+                    <span>{item.createdAt ? new Date(item.createdAt).toLocaleDateString("zh-CN") : ""}</span>
+                  </div>
+                  <span className="flex items-center gap-1">
+                    {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                    {isExpanded ? "收起" : "展开"}
+                  </span>
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
+
+        {items.length === 0 && !isLoading && (
+          <div className="text-muted-foreground text-center py-12 border rounded-lg border-dashed">
+            没有找到匹配的记忆
+          </div>
+        )}
+      </div>
+
+      {/* Health Check + Domain Summaries (moved to bottom) */}
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-sm font-medium">
@@ -341,125 +618,6 @@ export default function MemoryPage() {
                 </CardContent>
               </Card>
             ))}
-          </div>
-        )}
-      </div>
-
-      {/* Domain Filter */}
-      <div>
-        <div className="flex items-center gap-2 mb-2 text-sm text-muted-foreground">
-          <Filter className="h-4 w-4" />
-          按领域筛选
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            size="sm"
-            variant={activeDomain === null ? "default" : "outline"}
-            onClick={() => setActiveDomain(null)}
-          >
-            全部
-          </Button>
-          {domains.map((domain) => (
-            <Button
-              key={domain}
-              size="sm"
-              variant={activeDomain === domain ? "default" : "outline"}
-              onClick={() => setActiveDomain(activeDomain === domain ? null : domain)}
-            >
-              {domain}
-            </Button>
-          ))}
-        </div>
-      </div>
-
-      {/* Knowledge Items */}
-      <div className="space-y-3">
-        {items.map((item) => {
-          const config = typeConfig[item.type] ?? typeConfig.article;
-          const isExpanded = expandedId === item.id;
-
-          return (
-            <Card
-              key={item.id}
-              className="cursor-pointer hover:shadow-md transition-shadow"
-              onClick={() => setExpandedId(isExpanded ? null : item.id)}
-            >
-              <CardContent className="pt-4">
-                {/* Header */}
-                <div className="flex items-start justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <config.icon className={`h-4 w-4 ${config.color}`} />
-                    <Badge variant="outline" className="text-xs">
-                      {config.label}
-                    </Badge>
-                    <span className="font-semibold text-sm">{item.title}</span>
-                  </div>
-                  <span className={`text-xs px-2 py-0.5 rounded-full ${domainColors[item.domain] || ""}`}>
-                    {item.domain}
-                  </span>
-                </div>
-
-                {/* Summary */}
-                <p className="text-sm text-muted-foreground mb-2">{item.summary}</p>
-
-                {/* Tags */}
-                <div className="flex flex-wrap gap-1.5 mb-2">
-                  {(item.tags ?? []).map((tag) => (
-                    <Badge key={tag} variant="secondary" className="text-xs">
-                      #{tag}
-                    </Badge>
-                  ))}
-                </div>
-
-                {/* Expanded: raw content + source link */}
-                {isExpanded && (() => {
-                  const ext = item as unknown as Record<string, unknown>;
-                  const sourceUrl = ext.sourceUrl as string | null;
-                  const rawContent = ext.rawContent as string | null;
-                  return (
-                    <div className="mt-3 pt-3 border-t space-y-3">
-                      {sourceUrl && (
-                        <a
-                          href={sourceUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1.5 text-sm hover:underline"
-                          style={{ color: "var(--flywheel)" }}
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <ExternalLink className="h-3.5 w-3.5" />
-                          查看原文
-                        </a>
-                      )}
-                      {rawContent && (
-                        <div>
-                          <div className="text-xs font-medium text-muted-foreground mb-1">原文内容</div>
-                          <div className="text-sm text-muted-foreground bg-muted/50 rounded p-3 max-h-60 overflow-y-auto whitespace-pre-wrap leading-relaxed">
-                            {rawContent.slice(0, 2000)}
-                            {rawContent.length > 2000 && "..."}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })()}
-
-                {/* Date + expand indicator */}
-                <div className="flex items-center justify-between text-xs text-muted-foreground mt-2">
-                  <span>{item.createdAt}</span>
-                  <span className="flex items-center gap-1">
-                    {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-                    {isExpanded ? "收起" : "展开详情"}
-                  </span>
-                </div>
-              </CardContent>
-            </Card>
-          );
-        })}
-
-        {items.length === 0 && !isLoading && (
-          <div className="text-muted-foreground text-center py-12 border rounded-lg border-dashed">
-            没有找到匹配的记忆
           </div>
         )}
       </div>
